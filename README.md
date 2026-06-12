@@ -43,6 +43,8 @@ This project automates the safe version of that migration:
 - It creates or updates a destination copy.
 - It rewrites the copied thread id inside the rollout file.
 - It updates the target `model_provider`.
+- When cc-switch is available, GUI sync uses the destination cc-switch node to rewrite `model`, `reasoning_effort`, and continuation metadata in the copied rollout.
+- For non-official nodes, GUI sync enables proxy compatibility cleanup by removing official Codex-only reasoning and function/custom tool response items that can make routers such as Any Router or RightCode reject continued chats with `invalid codex request`.
 - It records clone mappings so repeated syncs update existing copies instead of creating duplicates.
 
 ## Features
@@ -149,7 +151,9 @@ When the same source thread is synced again, the tool checks `codex-history-sync
 
 ## cc-switch Integration
 
-History sync does not require cc-switch.
+Basic history copying does not strictly require cc-switch; without cc-switch, the tool can still copy between `model_provider` buckets.
+
+When `cc-switch.db` is available, GUI sync reads the destination Codex node configuration and uses it to rewrite continuation metadata in the target copy. For example, syncing to `custom` reads the `Any Router` node model and reasoning settings, then applies proxy compatibility cleanup to the copied rollout.
 
 If `cc-switch.db` is available, the GUI can read Codex nodes from cc-switch and display them in the `cc switch节点` dropdown. That dropdown is for launching Codex through a selected cc-switch node; the source and target history buckets still come from Codex `model_provider` values.
 

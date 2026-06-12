@@ -38,7 +38,10 @@ param(
     [switch]$IncludeImported,
     [switch]$DryRun,
     [switch]$ForceNew,
-    [switch]$NoGlobalState
+    [switch]$NoGlobalState,
+    [string]$TargetModel,
+    [string]$TargetReasoningEffort,
+    [switch]$SanitizeForProxy
 )
 
 $ErrorActionPreference = 'Stop'
@@ -89,7 +92,8 @@ function Resolve-ToolPath {
     foreach ($path in @(
             (Join-Path $script:RootDir "bin\$exeName"),
             (Join-Path $script:ToolDir "bin\$exeName"),
-            (Join-Path $script:RootDir "dist\codex-history-sync-portable\bin\$exeName")
+            (Join-Path $script:RootDir "dist\codex-history-sync-portable\bin\$exeName"),
+            (Join-Path (Split-Path -Parent $script:RootDir) "codex-history-sync-portable\bin\$exeName")
         )) {
         if (Test-Path -LiteralPath $path) {
             return (Resolve-Path -LiteralPath $path).Path
@@ -277,6 +281,101 @@ function Backup-CodexState {
     return $backupDir
 }
 
+function Get-TargetModelForRow {
+    param([Parameter(Mandatory)]$Row)
+
+    if (-not [string]::IsNullOrWhiteSpace($TargetModel)) { return $TargetModel }
+    return [string]$Row.model
+}
+
+function Get-TargetReasoningEffortForRow {
+    param([Parameter(Mandatory)]$Row)
+
+    if (-not [string]::IsNullOrWhiteSpace($TargetReasoningEffort)) { return $TargetReasoningEffort }
+    return [string]$Row.reasoning_effort
+}
+
+function Update-RolloutJsonNode {
+    param(
+        [AllowNull()]$Node,
+        [Parameter(Mandatory)][string]$NewProvider,
+        [AllowNull()][string]$NewModel,
+        [AllowNull()][string]$NewReasoningEffort
+    )
+
+    if ($null -eq $Node) { return }
+
+    if ($Node -is [System.Array]) {
+        foreach ($item in @($Node)) {
+            Update-RolloutJsonNode $item $NewProvider $NewModel $NewReasoningEffort
+        }
+        return
+    }
+
+    if (-not ($Node -is [psobject])) { return }
+
+    foreach ($property in @($Node.PSObject.Properties)) {
+        if ($property.Name -eq 'model_provider') {
+            $property.Value = $NewProvider
+            continue
+        }
+        if ($property.Name -eq 'model' -and -not [string]::IsNullOrWhiteSpace($NewModel) -and
+            $property.Value -is [string]) {
+            $property.Value = $NewModel
+            continue
+        }
+        if (($property.Name -eq 'reasoning_effort' -or $property.Name -eq 'model_reasoning_effort' -or $property.Name -eq 'effort') -and
+            -not [string]::IsNullOrWhiteSpace($NewReasoningEffort) -and
+            $property.Value -is [string]) {
+            $property.Value = $NewReasoningEffort
+            continue
+        }
+        if ($property.Name -eq 'previous_response_id') {
+            $Node.PSObject.Properties.Remove($property.Name)
+            continue
+        }
+
+        Update-RolloutJsonNode $property.Value $NewProvider $NewModel $NewReasoningEffort
+    }
+}
+
+function Convert-RolloutLineForTarget {
+    param(
+        [Parameter(Mandatory)][string]$Line,
+        [Parameter(Mandatory)][string]$OldId,
+        [Parameter(Mandatory)][string]$NewId,
+        [Parameter(Mandatory)][string]$OldProvider,
+        [Parameter(Mandatory)][string]$NewProvider,
+        [AllowNull()][string]$NewModel,
+        [AllowNull()][string]$NewReasoningEffort
+    )
+
+    $line = $Line.Replace($OldId, $NewId)
+
+    if ($line.IndexOf('"', [System.StringComparison]::Ordinal) -lt 0) {
+        return $line
+    }
+
+    try {
+        $obj = $line | ConvertFrom-Json
+        if ($SanitizeForProxy -and [string]$obj.type -eq 'response_item') {
+            $payloadType = [string]$obj.payload.type
+            if ($payloadType -ne 'message') {
+                return $null
+            }
+        }
+
+        Update-RolloutJsonNode $obj $NewProvider $NewModel $NewReasoningEffort
+        return ($obj | ConvertTo-Json -Depth 100 -Compress)
+    }
+    catch {
+        $providerPattern = '"model_provider"\s*:\s*"' + [regex]::Escape($OldProvider) + '"'
+        $safeProvider = $NewProvider -replace '"', '\"'
+        $providerReplacement = '"model_provider":"' + $safeProvider + '"'
+        return [regex]::Replace($line, $providerPattern, $providerReplacement)
+    }
+}
+
 function Copy-RolloutFile {
     param(
         [Parameter(Mandatory)][string]$SourcePath,
@@ -284,14 +383,12 @@ function Copy-RolloutFile {
         [Parameter(Mandatory)][string]$OldId,
         [Parameter(Mandatory)][string]$NewId,
         [Parameter(Mandatory)][string]$OldProvider,
-        [Parameter(Mandatory)][string]$NewProvider
+        [Parameter(Mandatory)][string]$NewProvider,
+        [AllowNull()][string]$NewModel,
+        [AllowNull()][string]$NewReasoningEffort
     )
 
     if ($DryRun) { return }
-
-    $providerPattern = '"model_provider"\s*:\s*"' + [regex]::Escape($OldProvider) + '"'
-    $safeProvider = $NewProvider -replace '"', '\"'
-    $providerReplacement = '"model_provider":"' + $safeProvider + '"'
 
     $tempPath = "$DestinationPath.tmp-$([Guid]::NewGuid().ToString('N'))"
     $shareMode = [System.IO.FileShare]([int][System.IO.FileShare]::ReadWrite -bor [int][System.IO.FileShare]::Delete)
@@ -325,9 +422,10 @@ function Copy-RolloutFile {
             $writer = [System.IO.StreamWriter]::new($destStream, [System.Text.UTF8Encoding]::new($false))
 
             while (($line = $reader.ReadLine()) -ne $null) {
-                $line = $line.Replace($OldId, $NewId)
-                $line = [regex]::Replace($line, $providerPattern, $providerReplacement)
-                $writer.WriteLine($line)
+                $convertedLine = Convert-RolloutLineForTarget $line $OldId $NewId $OldProvider $NewProvider $NewModel $NewReasoningEffort
+                if ($null -ne $convertedLine) {
+                    $writer.WriteLine($convertedLine)
+                }
             }
 
             $writer.Dispose()
@@ -621,12 +719,16 @@ function Update-ExistingClone {
         }
     }
 
-    Copy-RolloutFile $sourcePath $destPath ([string]$SourceRow.id) ([string]$MappedLink.cloned_id) ([string]$SourceRow.model_provider) $TargetProvider
+    $targetModel = Get-TargetModelForRow $SourceRow
+    $targetReasoningEffort = Get-TargetReasoningEffortForRow $SourceRow
+    Copy-RolloutFile $sourcePath $destPath ([string]$SourceRow.id) ([string]$MappedLink.cloned_id) ([string]$SourceRow.model_provider) $TargetProvider $targetModel $targetReasoningEffort
 
     $sourceId = Quote-Sql ([string]$SourceRow.id)
     $cloneId = Quote-Sql ([string]$MappedLink.cloned_id)
     $target = Quote-Sql $TargetProvider
     $dest = Quote-Sql $destPath
+    $targetModelSql = Quote-Sql $targetModel
+    $targetReasoningEffortSql = Quote-Sql $targetReasoningEffort
 
     $sql = @"
 PRAGMA busy_timeout=5000;
@@ -654,8 +756,8 @@ SET
   agent_nickname = (SELECT agent_nickname FROM threads WHERE id = $sourceId),
   agent_role = (SELECT agent_role FROM threads WHERE id = $sourceId),
   memory_mode = (SELECT memory_mode FROM threads WHERE id = $sourceId),
-  model = (SELECT model FROM threads WHERE id = $sourceId),
-  reasoning_effort = (SELECT reasoning_effort FROM threads WHERE id = $sourceId),
+  model = $targetModelSql,
+  reasoning_effort = $targetReasoningEffortSql,
   agent_path = (SELECT agent_path FROM threads WHERE id = $sourceId),
   created_at_ms = (SELECT created_at_ms FROM threads WHERE id = $sourceId),
   updated_at_ms = (SELECT updated_at_ms FROM threads WHERE id = $sourceId),
@@ -747,7 +849,9 @@ function Clone-Thread {
         }
     }
 
-    Copy-RolloutFile $sourcePath $destPath $ThreadId $newId $source.model_provider $TargetProvider
+    $targetModel = Get-TargetModelForRow $source
+    $targetReasoningEffort = Get-TargetReasoningEffortForRow $source
+    Copy-RolloutFile $sourcePath $destPath $ThreadId $newId $source.model_provider $TargetProvider $targetModel $targetReasoningEffort
 
     $sql = @"
 PRAGMA busy_timeout=5000;
@@ -763,7 +867,7 @@ SELECT
   $(Quote-Sql $newId), $(Quote-Sql $destPath), created_at, updated_at, source, $(Quote-Sql $TargetProvider), cwd, title,
   sandbox_policy, approval_mode, tokens_used, has_user_event, archived, archived_at,
   git_sha, git_branch, git_origin_url, cli_version, first_user_message,
-  agent_nickname, agent_role, memory_mode, model, reasoning_effort, agent_path,
+  agent_nickname, agent_role, memory_mode, $(Quote-Sql $targetModel), $(Quote-Sql $targetReasoningEffort), agent_path,
   created_at_ms, updated_at_ms, thread_source, preview
 FROM threads
 WHERE id = $(Quote-Sql $ThreadId);

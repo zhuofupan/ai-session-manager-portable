@@ -52,6 +52,8 @@ Codex Desktop 会把本地线程元数据放在 SQLite 数据库里，把对话 
 - 自动生成新的线程 id。
 - 自动重写复制出来的 rollout 文件里的线程 id。
 - 自动把目标记录的 `model_provider` 改成目标账号桶。
+- 如果检测到 cc-switch 目标节点，GUI 同步会按目标节点配置重写 `model`、`reasoning_effort` 和 rollout 里的续聊上下文。
+- 同步到非官方节点时会启用第三方兼容清理，移除官方 Codex 专用的 reasoning、function/custom tool response item，降低 Any Router、RightCode 等路由续聊时出现 `invalid codex request` 的概率。
 - 记录映射关系，重复同步同一条记录时更新已有副本，而不是无限创建重复记录。
 
 ## 主要功能
@@ -149,7 +151,9 @@ codex-history-sync.cmd mirror -Providers openai,custom
 
 ## cc-switch 支持
 
-普通历史同步不依赖 cc-switch。
+普通历史复制不强制依赖 cc-switch；没有 cc-switch 时仍然可以复制 `model_provider` 桶。
+
+如果找到了 `cc-switch.db`，GUI 在同步到目标账号桶时会读取目标 cc-switch 节点的 Codex 配置，并用于改写目标副本的续聊元数据。例如同步到 `custom` 时，工具会读取 `Any Router` 节点里的 `model`、`model_reasoning_effort` 等配置，并对目标 rollout 做第三方兼容清理。
 
 只有使用 GUI 里的 `cc switch节点` 下拉框切换节点并启动 Codex 时，才需要找到 `cc-switch.db`。这个下拉框读取的是 cc-switch 里的 Codex 节点，例如 `OpenAI Official`、`Any Router` 或你自己配置的节点。
 

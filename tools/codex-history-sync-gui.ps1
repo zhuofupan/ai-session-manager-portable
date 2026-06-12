@@ -92,7 +92,7 @@ function Get-CodexHomeHelpText {
 请选择 Codex 历史记录目录，也就是包含 state_5.sqlite 的 .codex 文件夹。
 
 常见位置：
-1. %USERPROFILE%\.codex
+1. C:\Users\<你的用户名>\.codex
 2. 环境变量 CODEX_HOME 指向的目录
 3. 便携或迁移环境中，可能在你手动设置过的 .codex 目录
 
@@ -142,6 +142,7 @@ function Resolve-CcSwitchDb {
             (Join-OptionalPath $RequestedHome 'cc-switch.db'),
             (Join-Path $script:RootDir 'cc-switch.db'),
             (Join-Path (Split-Path -Parent $script:RootDir) 'cc-switch.db'),
+            (Join-Path (Split-Path -Parent $script:RootDir) 'cc-switch\cc-switch.db'),
             (Join-OptionalPath $env:LOCALAPPDATA 'cc-switch\cc-switch.db'),
             (Join-OptionalPath $env:APPDATA 'cc-switch\cc-switch.db')
         )) {
@@ -165,7 +166,7 @@ function Get-CcSwitchHomeHelpText {
 
 常见位置：
 1. cc-switch.exe 所在目录
-2. 你解压或安装 cc-switch 的目录
+2. 你解压或安装 cc-switch 的目录，例如 C:\Tools\cc-switch
 3. %LOCALAPPDATA%\cc-switch 或 %APPDATA%\cc-switch
 
 如果自动加载不到新增账号：
@@ -235,7 +236,8 @@ function Resolve-ToolPath {
     foreach ($path in @(
             (Join-Path $script:RootDir "bin\$exeName"),
             (Join-Path $script:ToolDir "bin\$exeName"),
-            (Join-Path $script:RootDir "dist\codex-history-sync-portable\bin\$exeName")
+            (Join-Path $script:RootDir "dist\codex-history-sync-portable\bin\$exeName"),
+            (Join-Path (Split-Path -Parent $script:RootDir) "codex-history-sync-portable\bin\$exeName")
         )) {
         if (Test-Path -LiteralPath $path) {
             return (Resolve-Path -LiteralPath $path).Path
@@ -965,6 +967,56 @@ function Get-CcSwitchProviderById {
         throw "找不到 cc-switch Codex 节点 '$ProviderId'。请点击【增加账号目录】选择包含 cc-switch.db 的目录，然后刷新。"
     }
     return $rows[0]
+}
+
+function Get-CodexConfigStringValue {
+    param(
+        [AllowNull()][string]$Config,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Config)) { return '' }
+    $pattern = '(?m)^\s*' + [regex]::Escape($Name) + '\s*=\s*["'']([^"'']*)["'']\s*$'
+    $match = [System.Text.RegularExpressions.Regex]::Match($Config, $pattern)
+    if (-not $match.Success) { return '' }
+    return $match.Groups[1].Value
+}
+
+function Get-SyncTargetProfileArgs {
+    param([Parameter(Mandatory)][string]$TargetProvider)
+
+    $args = New-Object System.Collections.Generic.List[string]
+    if ([string]::IsNullOrWhiteSpace($script:CcSwitchDb)) { return $args.ToArray() }
+
+    try {
+        $provider = Get-CcSwitchProviderForHistoryProvider $TargetProvider
+        $settings = [string]$provider.settings_config | ConvertFrom-Json
+        $config = [string]$settings.config
+
+        $model = Get-CodexConfigStringValue $config 'model'
+        if (-not [string]::IsNullOrWhiteSpace($model)) {
+            $args.Add('-TargetModel')
+            $args.Add($model)
+        }
+
+        $reasoningEffort = Get-CodexConfigStringValue $config 'model_reasoning_effort'
+        if ([string]::IsNullOrWhiteSpace($reasoningEffort)) {
+            $reasoningEffort = Get-CodexConfigStringValue $config 'reasoning_effort'
+        }
+        if (-not [string]::IsNullOrWhiteSpace($reasoningEffort)) {
+            $args.Add('-TargetReasoningEffort')
+            $args.Add($reasoningEffort)
+        }
+
+        if (-not (Test-CcSwitchOfficialProvider $provider)) {
+            $args.Add('-SanitizeForProxy')
+        }
+    }
+    catch {
+        Append-Log "未能读取目标账号的 cc-switch 续聊配置，已按原始记录同步：$($_.Exception.Message)"
+    }
+
+    return $args.ToArray()
 }
 
 function Test-CcSwitchOfficialProvider {
@@ -1871,7 +1923,7 @@ $cloneButton.Add_Click({
         }
 
         foreach ($id in $ids) {
-            Invoke-SyncCli -CommandArgs @('clone', '-Id', $id, '-To', $target) -SkipConfirm -NoRefresh
+            Invoke-SyncCli -CommandArgs (@('clone', '-Id', $id, '-To', $target) + (Get-SyncTargetProfileArgs $target)) -SkipConfirm -NoRefresh
         }
         Refresh-Providers
         Refresh-Threads
@@ -1884,7 +1936,7 @@ $syncButton.Add_Click({
             [System.Windows.Forms.MessageBox]::Show('请先选择 Codex源账号和 Codex目标账号。', '账号不完整', 'OK', 'Information') | Out-Null
             return
         }
-        Invoke-SyncCli -CommandArgs @('sync', '-From', $source, '-To', $target)
+        Invoke-SyncCli -CommandArgs (@('sync', '-From', $source, '-To', $target) + (Get-SyncTargetProfileArgs $target))
     })
 
 $mirrorButton.Add_Click({
@@ -1894,7 +1946,21 @@ $mirrorButton.Add_Click({
             [System.Windows.Forms.MessageBox]::Show('请先选择两个 Codex 历史记录账号。', '账号不完整', 'OK', 'Information') | Out-Null
             return
         }
-        Invoke-SyncCli -CommandArgs @('mirror', '-Providers', "$source,$target")
+        $answer = [System.Windows.Forms.MessageBox]::Show(
+            "即将在 $(Get-ProviderLabel $source) 和 $(Get-ProviderLabel $target) 之间双向同步。工具会先创建备份。是否继续？",
+            '确认双向同步',
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        )
+        if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) {
+            Append-Log '已取消。'
+            return
+        }
+
+        Invoke-SyncCli -CommandArgs (@('sync', '-From', $source, '-To', $target) + (Get-SyncTargetProfileArgs $target)) -SkipConfirm -NoRefresh
+        Invoke-SyncCli -CommandArgs (@('sync', '-From', $target, '-To', $source) + (Get-SyncTargetProfileArgs $source)) -SkipConfirm -NoRefresh
+        Refresh-Providers
+        Refresh-Threads
     })
 
 $openCodexFolderButton.Add_Click({
