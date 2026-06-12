@@ -6,6 +6,8 @@
 [![Portable](https://img.shields.io/badge/install-portable-16a34a)](#quick-start)
 [![Privacy](https://img.shields.io/badge/privacy-local--first-111827)](#privacy-and-safety)
 
+Languages: [English](README.md) | [简体中文](README.zh-CN.md)
+
 Codex History Sync Portable is a small Windows utility for copying Codex Desktop local chat history between different `model_provider` buckets, such as `openai`, `custom`, and other provider names used by local routing tools.
 
 It is designed for people who switch Codex providers often and want the same local threads to remain visible across accounts without manually moving database rows or editing rollout files.
