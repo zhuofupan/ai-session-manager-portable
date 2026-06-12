@@ -331,7 +331,20 @@ function Test-NotifyMessageNeedsRolloutContext {
     param([AllowNull()][string]$Value)
 
     if ([string]::IsNullOrWhiteSpace($Value)) { return $true }
-    return ($Value -match '未知账号|未知目录|当前会话|当前任务已完成|Codex 已完成当前会话|turn-ended')
+    $clean = ($Value -replace '\s+', ' ').Trim()
+    if ($clean -match '未知账号|未知目录|当前会话|当前任务已完成|Codex 已完成当前会话|turn-ended') {
+        return $true
+    }
+    if ($clean -match '账号[:：]\s*codex(\s|\||$)') {
+        return $true
+    }
+    if ($clean -match 'codex\s*\|\s*codex') {
+        return $true
+    }
+    if ($clean -match '聊天[:：]\s*codex(\s|$)' -or $clean -match '任务[:：]\s*codex(\s|$)') {
+        return $true
+    }
+    return $false
 }
 
 if ([string]::IsNullOrWhiteSpace($Title)) {

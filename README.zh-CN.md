@@ -93,7 +93,7 @@ GUI 里的主要控件如下：
 | `cc switch节点` | `从终端启动` 时使用哪个 cc-switch Codex 节点 |
 | `从终端启动` | 以管理员身份打开终端；终端第一行会显示 `[管理员模式]` 或 `[非管理员]`；不勾选记录时新建对话；只勾选一条记录时自动恢复该会话；多选会提示只保留一条 |
 | `用 PowerShell` | 勾选时优先用 PowerShell 启动；取消勾选时优先用 CMD 启动；找不到首选终端时会自动退回另一种 |
-| `打开配置` | 打开根目录 `codex-history-sync-config.json`；首次会自动生成，保存后 GUI 自动刷新 |
+| `打开软件配置` | 打开根目录 `codex-history-sync-config.json`；首次会自动生成，保存后 GUI 自动刷新 |
 | `帮助` | 显示记录目录、账号目录、启动、更新等说明，并复制 Everything 搜索关键词 |
 | `检查更新` | 从 GitHub main 分支检查版本，发现新版后可一键热更新 |
 | `增加记录目录` | 手动选择 `.codex` 历史目录 |
@@ -151,7 +151,7 @@ codex-history-sync.cmd mirror -Providers openai,custom
 
 ## 配置文件
 
-新用户如果遇到 `请先选择账号` 或 `找不到 codex.exe`，点击 `打开配置`，按 `_help` 里的中文说明填写路径后保存即可。
+新用户如果遇到 `请先选择账号` 或 `找不到 codex.exe`，点击 `打开软件配置`，按 `_help` 里的中文说明填写路径后保存即可。
 
 1. GUI 会在根目录自动生成 `codex-history-sync-config.json`。
 2. 如果已经自动检测到 Codex 历史记录、cc-switch 节点或 Codex CLI，配置文件会自动写入这些路径和账号列表。
@@ -161,7 +161,11 @@ codex-history-sync.cmd mirror -Providers openai,custom
 
 如果根目录没有 `codex-history-sync-config.json`，GUI 会自动读取上一次运行保存的状态。这个状态保存在 `%APPDATA%\codex-history-sync-portable\last-state.json`，包含记录目录、账号目录、下拉菜单选择、目录筛选和勾选项，不包含 API key 或 token。
 
-`从终端启动` 会在 Codex `config.toml` 里把当前工作目录写为 trusted，并在启动命令里追加同样的 trust 覆盖参数，减少每次进入同一个目录都出现 `Do you trust the contents of this directory?` 确认提示。
+`从终端启动` 会在 Codex `config.toml` 里把当前工作目录写为 trusted，减少每次进入同一个目录都出现 `Do you trust the contents of this directory?` 确认提示。
+
+关闭 GUI 后，完成弹窗监控会继续在后台运行；再次打开 GUI 时会复用同一套配置并重启监控。GUI 本身只允许同时打开一个窗口。
+
+fast 模式下的 Apps 插件兼容保护会自动启用，界面不再显示额外复选框。
 
 ## 同步规则
 

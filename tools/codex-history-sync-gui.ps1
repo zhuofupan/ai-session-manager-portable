@@ -31,7 +31,7 @@ public static class CodexHistorySyncWindow {
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$script:AppVersion = '2026.06.13.5'
+$script:AppVersion = '2026.06.13.6'
 $script:AppAuthor = 'zhuofupan'
 $script:GitHubRepo = 'zhuofupan/codex-history-sync-portable'
 $script:GitHubUrl = "https://github.com/$script:GitHubRepo"
@@ -49,6 +49,8 @@ $script:SuppressStateSave = $false
 $script:ConfigWatcher = $null
 $script:ConfigReloadTimer = $null
 $script:ConfigReloadInProgress = $false
+$script:DisableCodexAppsOnFast = $true
+$script:GuiInstanceMutex = $null
 
 function Join-OptionalPath {
     param(
@@ -70,6 +72,20 @@ if ([string]::IsNullOrWhiteSpace($script:LastStateDir)) {
     $script:LastStateDir = Join-Path $script:RootDir '.local-state'
 }
 $script:LastStatePath = Join-Path $script:LastStateDir 'last-state.json'
+
+if (-not $SelfTest) {
+    $createdNew = $false
+    $script:GuiInstanceMutex = New-Object System.Threading.Mutex($true, 'Local\CodexHistorySyncPortableGui', [ref]$createdNew)
+    if (-not $createdNew) {
+        [System.Windows.Forms.MessageBox]::Show(
+            'Codex 历史记录同步已经在运行。请使用已打开的窗口，避免重复启动。后台完成弹窗监控会单独保持运行。',
+            '已经在运行',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        ) | Out-Null
+        return
+    }
+}
 
 function Resolve-CodexHome {
     param([AllowNull()][string]$Requested)
@@ -770,7 +786,7 @@ $(Get-CodexHomeHelpText)
 $(Get-CcSwitchHomeHelpText)
 
 【配置文件】
-- 点击【打开配置】会打开软件根目录下的 codex-history-sync-config.json。
+- 点击【打开软件配置】会打开软件根目录下的 codex-history-sync-config.json。
 - 第一次打开时会自动生成配置文件，并尽量写入已检测到的 Codex 记录目录、cc-switch 目录和账号列表。
 - 保存配置文件后，软件会自动重新读取并刷新界面。
 - 配置文件只写本机路径和默认选择，不要写 API key、token 或 auth.json 内容。
@@ -1013,7 +1029,7 @@ function Get-CurrentAppState {
         directoryFilter        = Get-SelectedCwdFilter
         limit                  = if ($script:LimitBox) { [int]$script:LimitBox.Value } else { 50 }
         includeArchived        = if ($script:IncludeArchivedBox) { [bool]$script:IncludeArchivedBox.Checked } else { $false }
-        disableAppsMcpOnFast   = if ($script:DisableCodexAppsBox) { [bool]$script:DisableCodexAppsBox.Checked } else { $true }
+        disableAppsOnFast      = [bool]$script:DisableCodexAppsOnFast
         turnCompletePopup      = if ($script:TurnEndedNotifyBox) { [bool]$script:TurnEndedNotifyBox.Checked } else { $true }
         usePowerShellTerminal  = if ($script:UsePowerShellLaunchBox) { [bool]$script:UsePowerShellLaunchBox.Checked } else { $false }
     }
@@ -1070,9 +1086,7 @@ function Import-AppConfig {
         if ($script:IncludeArchivedBox) {
             $script:IncludeArchivedBox.Checked = Get-ConfigBoolValue -Config $config -Names @('includeArchived') -Default ([bool]$script:IncludeArchivedBox.Checked)
         }
-        if ($script:DisableCodexAppsBox) {
-            $script:DisableCodexAppsBox.Checked = Get-ConfigBoolValue -Config $config -Names @('disableAppsMcpOnFast', 'disableCodexAppsOnFast') -Default ([bool]$script:DisableCodexAppsBox.Checked)
-        }
+        $script:DisableCodexAppsOnFast = Get-ConfigBoolValue -Config $config -Names @('disableAppsOnFast', 'disableAppsMcpOnFast', 'disableCodexAppsOnFast') -Default ([bool]$script:DisableCodexAppsOnFast)
         if ($script:TurnEndedNotifyBox) {
             $script:TurnEndedNotifyBox.Checked = Get-ConfigBoolValue -Config $config -Names @('turnCompletePopup', 'turnEndedNotify') -Default ([bool]$script:TurnEndedNotifyBox.Checked)
         }
@@ -1113,7 +1127,7 @@ function Import-AppConfig {
     if (-not $Silent) {
         [System.Windows.Forms.MessageBox]::Show(
             "配置已加载。`r`n`r`n$Path",
-            '打开配置',
+            '打开软件配置',
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Information
         ) | Out-Null
@@ -1192,7 +1206,7 @@ function New-AppConfigObject {
 
     return [pscustomobject][ordered]@{
         _help                      = [pscustomobject][ordered]@{
-            howToUse                  = '这个文件是本机配置。点击软件里的【打开配置】会打开它；保存后软件会自动刷新。JSON 不支持注释，所以说明文字放在 _help 里。'
+            howToUse                  = '这个文件是本机配置。点击软件里的【打开软件配置】会打开它；保存后软件会自动刷新。JSON 不支持注释，所以说明文字放在 _help 里。'
             codexHome                 = 'Codex 历史记录目录，必须包含 state_5.sqlite 和 sessions 文件夹。常见值：C:\Users\你的用户名\.codex。'
             ccSwitchHome              = 'cc-switch 节点目录，必须包含 cc-switch.db；也可以直接填 cc-switch.db 所在目录。'
             codexExe                  = 'codex.exe 的完整路径；如果 PATH 已经能找到 codex.exe，可以留空。'
@@ -1214,7 +1228,7 @@ function New-AppConfigObject {
         directoryFilter            = [string]$state.directoryFilter
         limit                      = [int]$state.limit
         includeArchived            = [bool]$state.includeArchived
-        disableAppsMcpOnFast       = [bool]$state.disableAppsMcpOnFast
+        disableAppsOnFast          = [bool]$state.disableAppsOnFast
         turnCompletePopup          = [bool]$state.turnCompletePopup
         usePowerShellTerminal      = [bool]$state.usePowerShellTerminal
         knownCodexHistoryProviders = @(Get-DetectedCodexHistoryProvidersForConfig)
@@ -1257,7 +1271,7 @@ function Sync-AppConfigFileWithDetectedInfo {
                     'directoryFilter',
                     'limit',
                     'includeArchived',
-                    'disableAppsMcpOnFast',
+                    'disableAppsOnFast',
                     'turnCompletePopup',
                     'usePowerShellTerminal'
                 )) {
@@ -1265,6 +1279,10 @@ function Sync-AppConfigFileWithDetectedInfo {
                 if ($null -ne $value -and -not (Test-TemplatePlaceholderValue ([string]$value))) {
                     Set-ObjectProperty -Object $config -Name $name -Value $value
                 }
+            }
+            $disableAppsValue = Get-ConfigPropertyValue -Config $existing -Names @('disableAppsOnFast', 'disableAppsMcpOnFast', 'disableCodexAppsOnFast')
+            if ($null -ne $disableAppsValue -and -not (Test-TemplatePlaceholderValue ([string]$disableAppsValue))) {
+                Set-ObjectProperty -Object $config -Name 'disableAppsOnFast' -Value $disableAppsValue
             }
         }
         catch {
@@ -1280,7 +1298,7 @@ function Sync-AppConfigFileWithDetectedInfo {
 function Open-AppConfigFile {
     Sync-AppConfigFileWithDetectedInfo -CreateIfMissing
     Start-Process -FilePath notepad.exe -ArgumentList @($script:AutoConfigPath) | Out-Null
-    Append-Log "已打开配置文件：$script:AutoConfigPath。保存后软件会自动刷新。"
+    Append-Log "已打开软件配置文件：$script:AutoConfigPath。保存后软件会自动刷新。"
 }
 
 function Start-AppConfigWatcher {
@@ -1579,7 +1597,7 @@ function Get-CodexExecutable {
     $fallback = Join-Path $env:LOCALAPPDATA 'OpenAI\Codex\bin\codex.exe'
     if (Test-Path -LiteralPath $fallback) { return $fallback }
 
-    throw "找不到 codex.exe。请确认 Codex CLI 已安装并加入 PATH；或点击【打开配置】，填写 codexExe 后保存。配置文件：$script:AutoConfigPath"
+    throw "找不到 codex.exe。请确认 Codex CLI 已安装并加入 PATH；或点击【打开软件配置】，填写 codexExe 后保存。配置文件：$script:AutoConfigPath"
 }
 
 function ConvertTo-PowerShellSingleQuotedString {
@@ -1702,8 +1720,6 @@ function Start-CodexInDirectory {
     $codexExe = Get-CodexExecutable
     $codexArgs = New-Object System.Collections.Generic.List[string]
     $resolvedDirectory = (Resolve-Path -LiteralPath $Directory).Path
-    $codexArgs.Add('-c')
-    $codexArgs.Add((Get-CodexProjectTrustOverrideArg -Directory $resolvedDirectory))
     $codexArgs.Add('-C')
     $codexArgs.Add($resolvedDirectory)
     if ($DisableApps) {
@@ -1746,7 +1762,7 @@ function Start-CodexInDirectory {
 
     $commandParts = @((ConvertTo-CmdArgument $codexExe)) + @($codexArgs | ForEach-Object { ConvertTo-CmdArgument $_ })
     $codexCommand = ($commandParts -join ' ').Trim()
-    $adminPrelude = 'net session >nul 2>&1 && (title 管理员 CMD - Codex && echo [管理员模式] 当前终端已提权) || (title 非管理员 CMD - Codex && echo [非管理员] 当前终端未提权)'
+    $adminPrelude = 'fltmc >nul 2>&1 && (title 管理员 CMD - Codex && echo [管理员模式] 当前终端已提权) || (title 非管理员 CMD - Codex && echo [非管理员] 当前终端未提权)'
     $command = $adminPrelude + ' && cd /d ' + (ConvertTo-CmdArgument $resolvedDirectory) + ' && ' + $codexCommand
     Start-Process -FilePath $shell.Path `
         -WorkingDirectory $resolvedDirectory `
@@ -2175,7 +2191,7 @@ function Repair-NodeReplMcpConfig {
             }
         }
         catch {
-            Add-CodexConfigFixMessage "node_repl MCP 的 CODEX_CLI_PATH 已失效，但暂未找到 codex.exe；如仍报错，请在【打开配置】里填写 codexExe。"
+            Add-CodexConfigFixMessage "node_repl MCP 的 CODEX_CLI_PATH 已失效，但暂未找到 codex.exe；如仍报错，请在【打开软件配置】里填写 codexExe。"
         }
     }
 
@@ -2524,7 +2540,7 @@ function Switch-CodexProviderRow {
     if ($settings.auth) {
         $authJson = $settings.auth | ConvertTo-Json -Depth 100 -Compress
     }
-    $disableCodexAppsOnFast = $script:DisableCodexAppsBox -and [bool]$script:DisableCodexAppsBox.Checked
+    $disableCodexAppsOnFast = [bool]$script:DisableCodexAppsOnFast
     $enableTurnEndedNotify = $script:TurnEndedNotifyBox -and [bool]$script:TurnEndedNotifyBox.Checked
     $configText = Normalize-CodexConfig ([string]$settings.config) `
         -DisableCodexAppsOnFast:$disableCodexAppsOnFast `
@@ -2560,7 +2576,7 @@ function Invoke-LaunchForProvider {
     $providerLabel = [string]$Combo.SelectedItem
     $providerId = Resolve-CcSwitchProviderId $providerLabel
     if ([string]::IsNullOrWhiteSpace($providerId)) {
-        throw '请先选择 cc switch节点。若下拉菜单为空，请点击【打开配置】填写 ccSwitchHome 后保存，或点击【增加节点目录】选择包含 cc-switch.db 的目录。'
+        throw '请先选择 cc switch节点。若下拉菜单为空，请点击【打开软件配置】填写 ccSwitchHome 后保存，或点击【增加节点目录】选择包含 cc-switch.db 的目录。'
     }
     $resumeSelection = Get-LaunchResumeSelection
     $resumeId = $null
@@ -2574,7 +2590,7 @@ function Invoke-LaunchForProvider {
 
     Switch-CodexProviderById $providerId | Out-Null
     Add-CodexProjectTrust -Directory $directory
-    $disableApps = $script:DisableCodexAppsBox -and [bool]$script:DisableCodexAppsBox.Checked -and ((Get-CodexServiceTier (Get-Content -LiteralPath (Join-Path $CodexHome 'config.toml') -Raw)) -eq 'fast')
+    $disableApps = [bool]$script:DisableCodexAppsOnFast -and ((Get-CodexServiceTier (Get-Content -LiteralPath (Join-Path $CodexHome 'config.toml') -Raw)) -eq 'fast')
     $preferPowerShell = $script:UsePowerShellLaunchBox -and [bool]$script:UsePowerShellLaunchBox.Checked
     $launchShell = Start-CodexInDirectory -Directory $directory -DisableApps:$disableApps -ResumeId $resumeId -PreferPowerShell:$preferPowerShell
     if (-not [string]::IsNullOrWhiteSpace($resumeId)) {
@@ -2938,11 +2954,11 @@ $script:Form.Controls.Add($syncButton)
 $script:Form.Controls.Add($mirrorButton)
 
 $script:Grid = New-Object System.Windows.Forms.DataGridView
-$openCodexFolderButton = New-Button '打开.codex目录' 1076 83 112
-$openConfigButton = New-Button '打开配置' 1196 83 76
+$openCodexFolderButton = New-Button '打开.codex目录' 854 47 112
+$openConfigButton = New-Button '打开软件配置' 974 47 112
 $helpButton = New-Button '帮助' 848 10 54
 $updateButton = New-Button '检查更新' 910 10 82
-$openRecordFolderButton = New-Button '打开记录目录' 852 83 104
+$openRecordFolderButton = New-Button '打开记录目录' 516 83 104
 $script:Form.Controls.Add($openCodexFolderButton)
 $script:Form.Controls.Add($openConfigButton)
 $script:Form.Controls.Add($helpButton)
@@ -2965,22 +2981,15 @@ $script:UsePowerShellLaunchBox.Size = New-Object System.Drawing.Size(96, 22)
 $script:UsePowerShellLaunchBox.Checked = $false
 $script:Form.Controls.Add($script:UsePowerShellLaunchBox)
 
-$script:DisableCodexAppsBox = New-Object System.Windows.Forms.CheckBox
-$script:DisableCodexAppsBox.Text = 'fast 禁用 Apps 插件'
-$script:DisableCodexAppsBox.Location = New-Object System.Drawing.Point(516, 87)
-$script:DisableCodexAppsBox.Size = New-Object System.Drawing.Size(138, 22)
-$script:DisableCodexAppsBox.Checked = $true
-$script:Form.Controls.Add($script:DisableCodexAppsBox)
-
 $script:TurnEndedNotifyBox = New-Object System.Windows.Forms.CheckBox
 $script:TurnEndedNotifyBox.Text = '每次完成弹窗'
-$script:TurnEndedNotifyBox.Location = New-Object System.Drawing.Point(660, 87)
+$script:TurnEndedNotifyBox.Location = New-Object System.Drawing.Point(626, 87)
 $script:TurnEndedNotifyBox.Size = New-Object System.Drawing.Size(108, 22)
 $script:TurnEndedNotifyBox.Checked = $true
 $script:Form.Controls.Add($script:TurnEndedNotifyBox)
 
-$testNotifyButton = New-Button '测试弹窗' 772 83 72
-$selectCcSwitchHomeButton = New-Button '增加节点目录' 964 83 104
+$testNotifyButton = New-Button '测试弹窗' 738 83 72
+$selectCcSwitchHomeButton = New-Button '增加节点目录' 818 83 104
 $script:Form.Controls.Add($testNotifyButton)
 $script:Form.Controls.Add($selectCcSwitchHomeButton)
 
@@ -3239,11 +3248,6 @@ $script:CwdCombo.Add_SelectedIndexChanged({
             Save-AppState
         }
     })
-$script:DisableCodexAppsBox.Add_CheckedChanged({
-        if (-not $script:SuppressThreadRefresh) {
-            Save-AppState
-        }
-    })
 $script:UsePowerShellLaunchBox.Add_CheckedChanged({
         if (-not $script:SuppressThreadRefresh) {
             Save-AppState
@@ -3270,6 +3274,11 @@ $script:Form.Add_FormClosing({
         if ($script:ConfigReloadTimer) {
             $script:ConfigReloadTimer.Stop()
             $script:ConfigReloadTimer.Dispose()
+        }
+        if ($script:GuiInstanceMutex) {
+            try { $script:GuiInstanceMutex.ReleaseMutex() | Out-Null } catch { }
+            $script:GuiInstanceMutex.Dispose()
+            $script:GuiInstanceMutex = $null
         }
     })
 
