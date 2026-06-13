@@ -12,6 +12,12 @@ Codex History Sync Portable 是一个 Windows 便携工具，用来把 Codex Des
 
 它适合经常在官方账号、自定义 API、cc-switch 节点或其他 Codex provider 之间切换的人。你不用手动改 SQLite，也不用自己复制 `rollout-*.jsonl` 文件，就能让同一批本地对话在不同 provider 桶里可见。
 
+## 软件截图
+
+![Codex History Sync GUI 界面预览](assets/screenshots/gui-overview.png)
+
+截图只使用示例数据，不包含真实本地聊天记录。
+
 ## 项目卡片
 
 | 项目 | 说明 |

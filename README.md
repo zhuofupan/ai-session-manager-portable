@@ -12,6 +12,12 @@ Codex History Sync Portable is a small Windows utility for copying Codex Desktop
 
 It is designed for people who switch Codex providers often and want the same local threads to remain visible across accounts without manually moving database rows or editing rollout files.
 
+## Screenshot
+
+![Codex History Sync GUI overview](assets/screenshots/gui-overview.png)
+
+The screenshot uses synthetic demo data only.
+
 ## Project Card
 
 | Field | Value |
