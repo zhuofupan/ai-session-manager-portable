@@ -31,7 +31,7 @@ public static class CodexHistorySyncWindow {
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$script:AppVersion = '2026.06.13.16'
+$script:AppVersion = '2026.06.13.17'
 $script:AppAuthor = 'Joff Pan'
 $script:GitHubRepo = 'zhuofupan/codex-history-sync-portable'
 $script:GitHubUrl = "https://github.com/$script:GitHubRepo"
@@ -195,7 +195,7 @@ function Resolve-CcSwitchDb {
 
 function Get-CcSwitchHomeHelpText {
     return @"
-请选择 cc-switch 节点目录，也就是包含 cc-switch.db 的目录。
+请选择 cc-switch.db 文件，或选择包含 cc-switch.db 的目录。
 
 常见位置：
 1. cc-switch.exe 所在目录
@@ -205,7 +205,7 @@ function Get-CcSwitchHomeHelpText {
 如果自动加载不到新增账号：
 - 先在 cc-switch 里确认已经新增并保存 Codex 节点
 - 回到本工具点击【刷新】
-- 仍然没有时，点击【账号配置文件】，选择包含 cc-switch.db 的目录
+- 仍然没有时，点击【加载cc-switch.db文件】，选择 cc-switch.db
 
 找不到时可以用 Everything 搜索 cc-switch.db，然后选择这个文件所在的目录。
 "@
@@ -291,11 +291,12 @@ $script:UiStrings = @{
         AddHistory           = '加载codex账号'
         OpenChatDir          = '打开聊天内容'
         CodexDir             = 'codex目录'
-        ImportCcConfig       = '账号配置文件'
-        Settings             = '软件设置'
+        ImportCcConfig       = '加载cc-switch.db文件'
+        Settings             = '软件配置文件'
         LaunchTerminal       = '从终端启动'
         LoadCheckedRecord    = '按勾选加载聊天'
         PowerShellLaunch     = 'PowerShell启动'
+        ApprovalNeverLaunch  = '完全访问(-a never)'
         CompletionPopup      = '弹窗提醒'
         TestPopup            = '测试弹窗'
         Help                 = '帮助'
@@ -351,11 +352,12 @@ $script:UiStrings = @{
         AddHistory           = 'Load Codex Account'
         OpenChatDir          = 'Open Chat Content'
         CodexDir             = 'Codex Dir'
-        ImportCcConfig       = 'Account Config File'
-        Settings             = 'Settings'
+        ImportCcConfig       = 'Load cc-switch.db'
+        Settings             = 'Software Config'
         LaunchTerminal       = 'Launch Terminal'
         LoadCheckedRecord    = 'Load Checked Chat'
         PowerShellLaunch     = 'PowerShell'
+        ApprovalNeverLaunch  = 'Full Access (-a never)'
         CompletionPopup      = 'Popup Alert'
         TestPopup            = 'Test Popup'
         Help                 = 'Help'
@@ -986,7 +988,7 @@ function Layout-ToolbarGroups {
         )) {
         Set-ControlWidthForText -Control $button -MinWidth 58 -Extra 30
     }
-    foreach ($check in @($script:IncludeArchivedBox, $script:LoadCheckedRecordBox, $script:UsePowerShellLaunchBox, $script:TurnEndedNotifyBox)) {
+    foreach ($check in @($script:IncludeArchivedBox, $script:LoadCheckedRecordBox, $script:UsePowerShellLaunchBox, $script:ApprovalNeverLaunchBox, $script:TurnEndedNotifyBox)) {
         Set-ControlWidthForText -Control $check -MinWidth 58 -Extra 28
     }
     foreach ($label in @($sourceLabel, $targetLabel, $cwdLabel, $limitLabel, $ccProviderLabel)) {
@@ -1033,7 +1035,8 @@ function Layout-ToolbarGroups {
     Move-Control $script:CodexProviderCombo ($ccProviderLabel.Right + 6) 24 170 24
     Move-Control $openCodexButton ($script:CodexProviderCombo.Right + 12) 22
     Move-Control $script:UsePowerShellLaunchBox ($openCodexButton.Right + 12) 25
-    Move-Control $script:LoadCheckedRecordBox ($script:UsePowerShellLaunchBox.Right + 12) 25
+    Move-Control $script:ApprovalNeverLaunchBox ($script:UsePowerShellLaunchBox.Right + 12) 25
+    Move-Control $script:LoadCheckedRecordBox ($script:ApprovalNeverLaunchBox.Right + 12) 25
     Move-Control $script:TurnEndedNotifyBox ($script:LoadCheckedRecordBox.Right + 12) 25
     Move-Control $testNotifyButton ($script:TurnEndedNotifyBox.Right + 12) 22
     Resize-GroupToFitControls -Group $launchGroup -MinWidth 0 -MinHeight 58 -RightPadding 18
@@ -1097,6 +1100,7 @@ function Apply-UiLanguage {
     Set-ControlText $openCodexButton 'LaunchTerminal'
     Set-ControlText $script:LoadCheckedRecordBox 'LoadCheckedRecord'
     Set-ControlText $script:UsePowerShellLaunchBox 'PowerShellLaunch'
+    Set-ControlText $script:ApprovalNeverLaunchBox 'ApprovalNeverLaunch'
     Set-ControlText $script:TurnEndedNotifyBox 'CompletionPopup'
     Set-ControlText $testNotifyButton 'TestPopup'
     Set-ControlText $helpButton 'Help'
@@ -1239,6 +1243,40 @@ function Select-FolderPath {
     }
 }
 
+function Select-FilePath {
+    param(
+        [Parameter(Mandatory)][string]$Title,
+        [AllowNull()][string]$InitialDirectory,
+        [string]$Filter = 'All files (*.*)|*.*'
+    )
+
+    $dialog = New-Object System.Windows.Forms.OpenFileDialog
+    $dialog.Title = $Title
+    $dialog.CheckFileExists = $true
+    $dialog.CheckPathExists = $true
+    $dialog.RestoreDirectory = $true
+    $dialog.Filter = $Filter
+    if (-not [string]::IsNullOrWhiteSpace($InitialDirectory) -and
+        (Test-Path -LiteralPath $InitialDirectory -PathType Container)) {
+        $dialog.InitialDirectory = $InitialDirectory
+    }
+
+    try {
+        if ($dialog.ShowDialog($script:Form) -ne [System.Windows.Forms.DialogResult]::OK) {
+            return $null
+        }
+
+        $selected = Convert-CodexPath $dialog.FileName
+        if (Test-Path -LiteralPath $selected -PathType Leaf) {
+            return (Resolve-Path -LiteralPath $selected).Path
+        }
+        return $null
+    }
+    finally {
+        $dialog.Dispose()
+    }
+}
+
 function Copy-TextToClipboard {
     param([Parameter(Mandatory)][string]$Text)
 
@@ -1325,12 +1363,12 @@ $clipboardNote
 【加载codex账号】
 $(Get-CodexHomeHelpText)
 
-【cc-switch 节点目录】
+【cc-switch.db 文件】
 $(Get-CcSwitchHomeHelpText)
-- 【账号配置文件】用于选择包含 cc-switch.db 的 cc-switch 配置目录；软件会从这里读取 Any Router、RightCode、OpenAI Official 等 Codex 节点，用于切换账号和从终端启动。
+- 【加载cc-switch.db文件】用于选择 cc-switch.db；软件会从这里读取 Any Router、RightCode、OpenAI Official 等 Codex 节点，用于切换账号和从终端启动。
 
 【配置文件】
-- 点击【软件设置】会打开软件根目录下的 codex-history-sync-config.json。
+- 点击【软件配置文件】会打开软件根目录下的 codex-history-sync-config.json。
 - 第一次打开时会自动生成配置文件，并尽量写入已检测到的 Codex 账号目录、cc-switch 目录和账号列表。
 - 保存配置文件后，软件会自动重新读取并刷新界面。
 - 配置文件只写本机路径和默认选择，不要写 API key、token 或 auth.json 内容。
@@ -1460,7 +1498,7 @@ function Show-AppHelp {
 
     Add-HelpRichLine -Box $box -Text 'cc-switch.db 配置' -Font $sectionFont -Color $blue
     Add-HelpRichBlock -Box $box -Text (Get-CcSwitchHomeHelpText) -Font $bodyFont -Color $slate
-    Add-HelpRichLine -Box $box -Text '点击【账号配置文件】选择包含 cc-switch.db 的目录；软件会从这里读取 Any Router、RightCode、OpenAI Official 等 Codex 节点。' -Font $strongFont -Color $green -BackColor $highlight
+    Add-HelpRichLine -Box $box -Text '点击【加载cc-switch.db文件】选择 cc-switch.db；软件会从这里读取 Any Router、RightCode、OpenAI Official 等 Codex 节点。' -Font $strongFont -Color $green -BackColor $highlight
     Add-HelpRichLine -Box $box -Text ''
 
     Add-HelpRichLine -Box $box -Text '从终端启动' -Font $sectionFont -Color $blue
@@ -1468,10 +1506,11 @@ function Show-AppHelp {
     Add-HelpRichLine -Box $box -Text '- 勾选【按勾选加载聊天】且只勾选一条记录：自动执行 codex resume <线程 ID>。' -Font $bodyFont -Color $slate
     Add-HelpRichLine -Box $box -Text '- 勾选多条记录：会提示只保留一条。' -Font $bodyFont -Color $slate
     Add-HelpRichLine -Box $box -Text '- 勾选【PowerShell启动】时优先用 PowerShell；取消勾选时优先用 CMD。' -Font $bodyFont -Color $slate
+    Add-HelpRichLine -Box $box -Text '- 勾选【完全访问(-a never)】时启动命令会追加 -a never。' -Font $bodyFont -Color $slate
     Add-HelpRichLine -Box $box -Text ''
 
     Add-HelpRichLine -Box $box -Text '配置与更新' -Font $sectionFont -Color $blue
-    Add-HelpRichLine -Box $box -Text '- 点击【软件设置】会打开 codex-history-sync-config.json；保存后软件自动刷新。' -Font $bodyFont -Color $slate
+    Add-HelpRichLine -Box $box -Text '- 点击【软件配置文件】会打开 codex-history-sync-config.json；保存后软件自动刷新。' -Font $bodyFont -Color $slate
     Add-HelpRichLine -Box $box -Text '- 点击【检查更新】会从 GitHub main 分支检查新版并支持热更新。' -Font $bodyFont -Color $slate
     Add-HelpRichLine -Box $box -Text '不要把 API key、token、auth.json、config.toml 或 state_5.sqlite 内容写进配置文件。' -Font $strongFont -Color $red -BackColor $warningBack
 
@@ -1540,10 +1579,10 @@ function Set-CcSwitchHomeFromSelection {
 
     $script:CcSwitchDb = $resolved
     $script:CcSwitchSettingsPath = Join-Path (Split-Path -Parent $script:CcSwitchDb) 'settings.json'
-    Append-Log "已加载 cc-switch 节点目录：$(Split-Path -Parent $script:CcSwitchDb)"
+    Append-Log "已加载 cc-switch.db 文件：$script:CcSwitchDb"
     Refresh-Providers
     Save-AppState
-    Sync-AppConfigFileWithDetectedInfo -CreateIfMissing
+    Sync-AppConfigFileWithDetectedInfo -CreateIfMissing -ForceCurrentCcSwitchHome
 }
 
 function Select-CcSwitchHomeFolder {
@@ -1556,9 +1595,10 @@ function Select-CcSwitchHomeFolder {
         $initialDirectory = $script:RootDir
     }
 
-    $selected = Select-FolderPath `
-        -Title '请选择 cc-switch 节点目录；进入包含 cc-switch.db 的文件夹后点击打开' `
-        -InitialDirectory $initialDirectory
+    $selected = Select-FilePath `
+        -Title '请选择 cc-switch.db 文件' `
+        -InitialDirectory $initialDirectory `
+        -Filter 'cc-switch database (cc-switch.db)|cc-switch.db|SQLite database (*.db)|*.db|All files (*.*)|*.*'
     if (-not [string]::IsNullOrWhiteSpace($selected)) {
         Set-CcSwitchHomeFromSelection $selected
     }
@@ -1705,6 +1745,7 @@ function Get-CurrentAppState {
         disableAppsOnFast      = [bool]$script:DisableCodexAppsOnFast
         turnCompletePopup      = if ($script:TurnEndedNotifyBox) { [bool]$script:TurnEndedNotifyBox.Checked } else { $true }
         usePowerShellTerminal  = if ($script:UsePowerShellLaunchBox) { [bool]$script:UsePowerShellLaunchBox.Checked } else { $false }
+        approvalNeverOnLaunch  = if ($script:ApprovalNeverLaunchBox) { [bool]$script:ApprovalNeverLaunchBox.Checked } else { $false }
         loadCheckedRecordOnLaunch = if ($script:LoadCheckedRecordBox) { [bool]$script:LoadCheckedRecordBox.Checked } else { $true }
         uiLanguage             = [string]$script:UiLanguage
     }
@@ -1768,6 +1809,9 @@ function Import-AppConfig {
         if ($script:UsePowerShellLaunchBox) {
             $script:UsePowerShellLaunchBox.Checked = Get-ConfigBoolValue -Config $config -Names @('usePowerShellTerminal', 'preferPowerShell') -Default ([bool]$script:UsePowerShellLaunchBox.Checked)
         }
+        if ($script:ApprovalNeverLaunchBox) {
+            $script:ApprovalNeverLaunchBox.Checked = Get-ConfigBoolValue -Config $config -Names @('approvalNeverOnLaunch', 'fullAccessOnLaunch', 'approvalModeNeverOnLaunch') -Default ([bool]$script:ApprovalNeverLaunchBox.Checked)
+        }
         if ($script:LoadCheckedRecordBox) {
             $script:LoadCheckedRecordBox.Checked = Get-ConfigBoolValue -Config $config -Names @('loadCheckedRecordOnLaunch', 'resumeCheckedRecordOnLaunch', 'loadSelectedRecordOnLaunch') -Default ([bool]$script:LoadCheckedRecordBox.Checked)
         }
@@ -1809,7 +1853,7 @@ function Import-AppConfig {
     if (-not $Silent) {
         [System.Windows.Forms.MessageBox]::Show(
             "配置已加载。`r`n`r`n$Path",
-            '软件设置',
+            '软件配置文件',
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Information
         ) | Out-Null
@@ -1888,14 +1932,15 @@ function New-AppConfigObject {
 
     return [pscustomobject][ordered]@{
         _help                      = [pscustomobject][ordered]@{
-            howToUse                  = '这个文件是本机配置。点击软件里的【软件设置】会打开它；保存后软件会自动刷新。JSON 不支持注释，所以说明文字放在 _help 里。'
+            howToUse                  = '这个文件是本机配置。点击软件里的【软件配置文件】会打开它；保存后软件会自动刷新。JSON 不支持注释，所以说明文字放在 _help 里。'
             codexHome                 = '加载codex账号时选择的 .codex 文件夹，必须包含 state_5.sqlite 和 sessions 文件夹。常见值：C:\Users\你的用户名\.codex。'
-            ccSwitchHome              = '账号配置文件目录，必须包含 cc-switch.db；也可以直接填 cc-switch.db 所在目录。'
+            ccSwitchHome              = 'cc-switch.db 所在目录；点击【加载cc-switch.db文件】成功后会自动写入这里。'
             codexExe                  = 'codex.exe 的完整路径；如果 PATH 已经能找到 codex.exe，可以留空。'
             defaultSourceProvider     = 'Codex 历史记录里的 model_provider 桶，例如 openai、custom、rightcode。可参考 knownCodexHistoryProviders。'
             defaultTargetProvider     = '同步目标 model_provider 桶。'
             defaultCcSwitchNode       = '从终端启动时使用的 cc-switch Codex 节点名字或 id。可参考 knownCcSwitchNodes。'
             usePowerShellTerminal     = 'true 表示从终端启动时优先用 PowerShell；false 表示优先用 CMD。'
+            approvalNeverOnLaunch     = 'true 表示从终端启动 Codex 时追加 -a never，也就是 approval mode never。'
             loadCheckedRecordOnLaunch = 'true 表示从终端启动时，如果【按勾选加载聊天】已开启且列表最左侧只勾选了一条记录，就自动恢复该对话；false 表示忽略勾选并在目录下新建对话。'
             uiLanguage                = '界面语言。zh-CN 表示中文，en-US 表示英文。'
             knownCodexHistoryProviders = '软件自动检测到的历史记录账号列表，只作参考。'
@@ -1915,6 +1960,7 @@ function New-AppConfigObject {
         disableAppsOnFast          = [bool]$state.disableAppsOnFast
         turnCompletePopup          = [bool]$state.turnCompletePopup
         usePowerShellTerminal      = [bool]$state.usePowerShellTerminal
+        approvalNeverOnLaunch      = [bool]$state.approvalNeverOnLaunch
         loadCheckedRecordOnLaunch  = [bool]$state.loadCheckedRecordOnLaunch
         uiLanguage                 = [string]$state.uiLanguage
         knownCodexHistoryProviders = @(Get-DetectedCodexHistoryProvidersForConfig)
@@ -1937,7 +1983,10 @@ function Write-AppConfigObject {
 }
 
 function Sync-AppConfigFileWithDetectedInfo {
-    param([switch]$CreateIfMissing)
+    param(
+        [switch]$CreateIfMissing,
+        [switch]$ForceCurrentCcSwitchHome
+    )
 
     if (-not (Test-Path -LiteralPath $script:AutoConfigPath -PathType Leaf) -and -not $CreateIfMissing) {
         return
@@ -1960,9 +2009,11 @@ function Sync-AppConfigFileWithDetectedInfo {
                     'disableAppsOnFast',
                     'turnCompletePopup',
                     'usePowerShellTerminal',
+                    'approvalNeverOnLaunch',
                     'loadCheckedRecordOnLaunch',
                     'uiLanguage'
                 )) {
+                if ($ForceCurrentCcSwitchHome -and $name -eq 'ccSwitchHome') { continue }
                 $value = Get-ConfigPropertyValue -Config $existing -Names @($name)
                 if ($null -ne $value -and -not (Test-TemplatePlaceholderValue ([string]$value))) {
                     Set-ObjectProperty -Object $config -Name $name -Value $value
@@ -1986,7 +2037,7 @@ function Sync-AppConfigFileWithDetectedInfo {
 function Open-AppConfigFile {
     Sync-AppConfigFileWithDetectedInfo -CreateIfMissing
     Start-Process -FilePath notepad.exe -ArgumentList @($script:AutoConfigPath) | Out-Null
-    Append-Log "已打开软件设置文件：$script:AutoConfigPath。保存后软件会自动刷新。"
+    Append-Log "已打开软件配置文件：$script:AutoConfigPath。保存后软件会自动刷新。"
 }
 
 function Start-AppConfigWatcher {
@@ -2316,7 +2367,7 @@ function Get-CodexExecutable {
     $fallback = Join-Path $env:LOCALAPPDATA 'OpenAI\Codex\bin\codex.exe'
     if (Test-Path -LiteralPath $fallback) { return $fallback }
 
-    throw "找不到 codex.exe。请确认 Codex CLI 已安装并加入 PATH；或点击【软件设置】，填写 codexExe 后保存。配置文件：$script:AutoConfigPath"
+    throw "找不到 codex.exe。请确认 Codex CLI 已安装并加入 PATH；或点击【软件配置文件】，填写 codexExe 后保存。配置文件：$script:AutoConfigPath"
 }
 
 function ConvertTo-PowerShellSingleQuotedString {
@@ -2432,6 +2483,7 @@ function Start-CodexInDirectory {
     param(
         [Parameter(Mandatory)][string]$Directory,
         [bool]$DisableApps,
+        [bool]$ApprovalNever,
         [AllowNull()][string]$ResumeId,
         [bool]$PreferPowerShell
     )
@@ -2444,6 +2496,10 @@ function Start-CodexInDirectory {
     if ($DisableApps) {
         $codexArgs.Add('--disable')
         $codexArgs.Add('apps')
+    }
+    if ($ApprovalNever) {
+        $codexArgs.Add('-a')
+        $codexArgs.Add('never')
     }
     if (-not [string]::IsNullOrWhiteSpace($ResumeId)) {
         $safeResumeId = $ResumeId.Trim()
@@ -2539,7 +2595,7 @@ function Get-CcSwitchProviderById {
     $safe = Quote-Sql $ProviderId
     $rows = Invoke-CcSwitchSqlJson "select id,name,settings_config from providers where app_type='codex' and id=$safe limit 1;"
     if ($rows.Count -eq 0) {
-        throw "找不到 cc-switch Codex 节点 '$ProviderId'。请点击【账号配置文件】选择包含 cc-switch.db 的目录，然后刷新。"
+        throw "找不到 cc-switch Codex 节点 '$ProviderId'。请点击【加载cc-switch.db文件】选择 cc-switch.db，然后刷新。"
     }
     return $rows[0]
 }
@@ -2910,7 +2966,7 @@ function Repair-NodeReplMcpConfig {
             }
         }
         catch {
-            Add-CodexConfigFixMessage "node_repl MCP 的 CODEX_CLI_PATH 已失效，但暂未找到 codex.exe；如仍报错，请在【软件设置】里填写 codexExe。"
+            Add-CodexConfigFixMessage "node_repl MCP 的 CODEX_CLI_PATH 已失效，但暂未找到 codex.exe；如仍报错，请在【软件配置文件】里填写 codexExe。"
         }
     }
 
@@ -3300,7 +3356,7 @@ function Invoke-LaunchForProvider {
     $providerLabel = [string]$Combo.SelectedItem
     $providerId = Resolve-CcSwitchProviderId $providerLabel
     if ([string]::IsNullOrWhiteSpace($providerId)) {
-        throw '请先选择 cc-switch供应商。若下拉菜单为空，请点击【软件设置】填写 ccSwitchHome 后保存，或点击【账号配置文件】选择包含 cc-switch.db 的目录。'
+        throw '请先选择 cc-switch供应商。若下拉菜单为空，请点击【软件配置文件】填写 ccSwitchHome 后保存，或点击【加载cc-switch.db文件】选择 cc-switch.db。'
     }
     $loadCheckedRecord = $script:LoadCheckedRecordBox -and [bool]$script:LoadCheckedRecordBox.Checked
     $resumeSelection = if ($loadCheckedRecord) { Get-LaunchResumeSelection } else { $null }
@@ -3319,23 +3375,18 @@ function Invoke-LaunchForProvider {
     }
     Add-CodexProjectTrust -Directory $directory
     $disableApps = [bool]$script:DisableCodexAppsOnFast -and ((Get-CodexServiceTier (Get-Content -LiteralPath (Join-Path $CodexHome 'config.toml') -Raw)) -eq 'fast')
+    $approvalNever = $script:ApprovalNeverLaunchBox -and [bool]$script:ApprovalNeverLaunchBox.Checked
     $preferPowerShell = $script:UsePowerShellLaunchBox -and [bool]$script:UsePowerShellLaunchBox.Checked
-    $launchShell = Start-CodexInDirectory -Directory $directory -DisableApps:$disableApps -ResumeId $resumeId -PreferPowerShell:$preferPowerShell
+    $launchShell = Start-CodexInDirectory -Directory $directory -DisableApps:$disableApps -ApprovalNever:$approvalNever -ResumeId $resumeId -PreferPowerShell:$preferPowerShell
+    $launchFlags = @()
+    if ($disableApps) { $launchFlags += '--disable apps' }
+    if ($approvalNever) { $launchFlags += '-a never' }
+    $launchFlagText = if ($launchFlags.Count -gt 0) { '，并追加 ' + ($launchFlags -join '、') } else { '' }
     if (-not [string]::IsNullOrWhiteSpace($resumeId)) {
-        if ($disableApps) {
-            Append-Log "已用 $providerLabel 管理员 $launchShell 恢复 Codex 会话 $resumeId，并追加 --disable apps：$directory"
-        }
-        else {
-            Append-Log "已用 $providerLabel 管理员 $launchShell 恢复 Codex 会话 $resumeId：$directory"
-        }
+        Append-Log "已用 $providerLabel 管理员 $launchShell 恢复 Codex 会话 $resumeId$launchFlagText：$directory"
     }
     else {
-        if ($disableApps) {
-            Append-Log "已用 $providerLabel 管理员 $launchShell 启动 Codex，并追加 --disable apps：$directory"
-        }
-        else {
-            Append-Log "已用 $providerLabel 管理员 $launchShell 启动 Codex：$directory"
-        }
+        Append-Log "已用 $providerLabel 管理员 $launchShell 启动 Codex$launchFlagText：$directory"
     }
     Save-AppState
 }
@@ -3917,8 +3968,8 @@ $script:Form.Controls.Add($pathGroup)
 $selectCodexHomeButton = New-Button '加载codex账号' 14 24 118
 $openRecordFolderButton = New-Button '打开聊天内容' 142 24 118 'Soft'
 $openCodexFolderButton = New-Button 'codex目录' 270 24 112
-$selectCcSwitchHomeButton = New-Button '账号配置文件' 14 54 126
-$openConfigButton = New-Button '软件设置' 178 54 112 'Soft'
+$selectCcSwitchHomeButton = New-Button '加载cc-switch.db文件' 14 54 150
+$openConfigButton = New-Button '软件配置文件' 178 54 126 'Soft'
 $pathGroup.Controls.Add($selectCodexHomeButton)
 $pathGroup.Controls.Add($openRecordFolderButton)
 $pathGroup.Controls.Add($openCodexFolderButton)
@@ -3948,13 +3999,19 @@ $script:UsePowerShellLaunchBox.Location = New-Object System.Drawing.Point(550, 2
 $script:UsePowerShellLaunchBox.Size = New-Object System.Drawing.Size(118, 22)
 $script:UsePowerShellLaunchBox.Checked = $false
 $launchGroup.Controls.Add($script:UsePowerShellLaunchBox)
+$script:ApprovalNeverLaunchBox = New-Object System.Windows.Forms.CheckBox
+$script:ApprovalNeverLaunchBox.Text = '完全访问(-a never)'
+$script:ApprovalNeverLaunchBox.Location = New-Object System.Drawing.Point(676, 25)
+$script:ApprovalNeverLaunchBox.Size = New-Object System.Drawing.Size(140, 22)
+$script:ApprovalNeverLaunchBox.Checked = $false
+$launchGroup.Controls.Add($script:ApprovalNeverLaunchBox)
 $script:TurnEndedNotifyBox = New-Object System.Windows.Forms.CheckBox
 $script:TurnEndedNotifyBox.Text = '弹窗提醒'
-$script:TurnEndedNotifyBox.Location = New-Object System.Drawing.Point(676, 25)
+$script:TurnEndedNotifyBox.Location = New-Object System.Drawing.Point(824, 25)
 $script:TurnEndedNotifyBox.Size = New-Object System.Drawing.Size(82, 22)
 $script:TurnEndedNotifyBox.Checked = $true
 $launchGroup.Controls.Add($script:TurnEndedNotifyBox)
-$testNotifyButton = New-Button '测试弹窗' 764 22 94
+$testNotifyButton = New-Button '测试弹窗' 914 22 94
 $launchGroup.Controls.Add($testNotifyButton)
 
 $supportGroup = New-GroupBox '帮助与更新' 904 166 226 58
@@ -4341,6 +4398,11 @@ $script:UsePowerShellLaunchBox.Add_CheckedChanged({
             Save-AppState
         }
     })
+$script:ApprovalNeverLaunchBox.Add_CheckedChanged({
+        if (-not $script:SuppressThreadRefresh) {
+            Save-AppState
+        }
+    })
 $script:LoadCheckedRecordBox.Add_CheckedChanged({
         if (-not $script:SuppressThreadRefresh) {
             Save-AppState
@@ -4403,7 +4465,7 @@ else {
     Append-Log ("尚未加载 Codex 账号。请点击 ""加载codex账号""。" + "`r`n`r`n" + (Get-CodexHomeHelpText))
 }
 if ([string]::IsNullOrWhiteSpace($script:CcSwitchDb)) {
-    Append-Log ("未找到 cc-switch.db：历史同步可用，切换账号启动功能不可用。请点击 ""账号配置文件""，选择包含 cc-switch.db 的目录。" + "`r`n`r`n" + (Get-CcSwitchHomeHelpText))
+    Append-Log ("未找到 cc-switch.db：历史同步可用，切换账号启动功能不可用。请点击 ""加载cc-switch.db文件""，选择 cc-switch.db。" + "`r`n`r`n" + (Get-CcSwitchHomeHelpText))
 }
 else {
     Append-Log "cc-switch 数据库：$script:CcSwitchDb"

@@ -95,13 +95,14 @@ GUI 里的主要控件如下：
 | `按勾选加载聊天` | 开启后，勾选一条记录会执行 `codex resume <thread-id>`；关闭后忽略勾选并在当前目录新建对话 |
 | `PowerShell启动` | 勾选时优先用 PowerShell 启动；取消勾选时优先用 CMD 启动；找不到首选终端时会自动退回另一种 |
 | 标题栏 `GitHub` 右侧语言文字 | 在中文和英文界面之间切换 |
-| `软件设置` | 打开根目录 `codex-history-sync-config.json`；首次会自动生成，保存后 GUI 自动刷新 |
-| `帮助` | 显示加载codex账号、账号配置文件、启动、更新等说明，并复制 Everything 搜索关键词 |
+| `软件配置文件` | 打开根目录 `codex-history-sync-config.json`；首次会自动生成，保存后 GUI 自动刷新 |
+| `帮助` | 显示加载codex账号、cc-switch.db、启动、更新等说明，并复制 Everything 搜索关键词 |
 | `检查更新` | 从 GitHub main 分支检查版本，发现新版后可一键热更新 |
 | `加载codex账号` | 手动选择包含 `state_5.sqlite` 的 `.codex` 文件夹 |
 | `打开聊天内容` | 打开当前选中聊天的 rollout 文件夹；未选中时打开 `.codex\sessions` |
 | `codex目录` | 打开当前 Codex 历史根目录 |
-| `账号配置文件` | 手动选择包含 `cc-switch.db` 的 cc-switch 配置目录，让 GUI 读取 Any Router、RightCode 等启动供应商 |
+| `加载cc-switch.db文件` | 手动选择 `cc-switch.db`，让 GUI 读取 Any Router、RightCode 等启动供应商 |
+| `完全访问(-a never)` | 从终端启动 Codex 时追加 `-a never` |
 | 表格右键菜单 | 在表格中快速启动终端、启动终端并加载当前聊天、同步此条/勾选/所有记录、打开目录或复制信息 |
 
 如果你误选了 `sessions` 或它下面的子目录，工具会自动向上查找包含 `state_5.sqlite` 的父目录。
@@ -156,7 +157,7 @@ codex-history-sync.cmd mirror -Providers openai,custom
 
 ## 配置文件
 
-新用户如果遇到 `请先选择账号` 或 `找不到 codex.exe`，点击 `软件设置`，按 `_help` 里的中文说明填写路径后保存即可。
+新用户如果遇到 `请先选择账号` 或 `找不到 codex.exe`，点击 `软件配置文件`，按 `_help` 里的中文说明填写路径后保存即可。
 
 1. GUI 会在根目录自动生成 `codex-history-sync-config.json`。
 2. 如果已经自动检测到 Codex 历史记录、cc-switch 节点或 Codex CLI，配置文件会自动写入这些路径和账号列表。
@@ -194,7 +195,7 @@ fast 模式下的 Apps 插件兼容保护会自动启用，界面不再显示额
 4. `%LOCALAPPDATA%\cc-switch\cc-switch.db`。
 5. `%APPDATA%\cc-switch\cc-switch.db`。
 
-如果新增节点后没有显示，先点 `刷新`。仍然没有时，点 `账号配置文件`，选择包含 `cc-switch.db` 的目录。
+如果新增节点后没有显示，先点 `刷新`。仍然没有时，点 `加载cc-switch.db文件`，选择 `cc-switch.db`。
 
 注意：`Codex源账号` 和 `Codex目标账号` 表示 Codex 历史记录里的 `model_provider` 桶；`cc-switch供应商` 表示启动 Codex 时使用的 cc-switch 节点。两者不是同一个概念。
 
@@ -276,7 +277,7 @@ GUI 里的 `弹窗提醒` 默认用于本地提醒。启用后，工具会：
 
 如果启动 Codex 时看到 `MCP client for node_repl failed to start`，通常是 Codex Desktop 更新后旧运行时路径失效。通过 GUI 切换节点或启用弹窗提醒时，工具会自动修复 `config.toml` 里的 `node_repl.exe`、`node.exe`、`node_modules` 和 `codex.exe` 路径。
 
-如果看不到 cc-switch 供应商，点击 `账号配置文件`，选择包含 `cc-switch.db` 的目录。
+如果看不到 cc-switch 供应商，点击 `加载cc-switch.db文件`，选择 `cc-switch.db`。
 
 ## 开发说明
 
