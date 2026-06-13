@@ -30,8 +30,9 @@ public static class CodexHistorySyncWindow {
 "@
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
+[System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException)
 
-$script:AppVersion = '2026.06.13.17'
+$script:AppVersion = '2026.06.13.18'
 $script:AppAuthor = 'Joff Pan'
 $script:GitHubRepo = 'zhuofupan/codex-history-sync-portable'
 $script:GitHubUrl = "https://github.com/$script:GitHubRepo"
@@ -195,7 +196,7 @@ function Resolve-CcSwitchDb {
 
 function Get-CcSwitchHomeHelpText {
     return @"
-请选择 cc-switch.db 文件，或选择包含 cc-switch.db 的目录。
+请选择 cc-switch.db 文件、同结构 .db 文件，或选择包含 cc-switch.db 的目录。
 
 常见位置：
 1. cc-switch.exe 所在目录
@@ -205,9 +206,9 @@ function Get-CcSwitchHomeHelpText {
 如果自动加载不到新增账号：
 - 先在 cc-switch 里确认已经新增并保存 Codex 节点
 - 回到本工具点击【刷新】
-- 仍然没有时，点击【加载cc-switch.db文件】，选择 cc-switch.db
+- 仍然没有时，点击【加载cc-switch.db文件】，选择 cc-switch.db 或同结构 .db 文件
 
-找不到时可以用 Everything 搜索 cc-switch.db，然后选择这个文件所在的目录。
+找不到时可以用 Everything 搜索 cc-switch.db，然后选择这个文件所在的目录或对应数据库文件。
 "@
 }
 
@@ -219,7 +220,9 @@ function Resolve-CcSwitchDbFromSelection {
     if (-not (Test-Path -LiteralPath $path)) { return $null }
 
     if (Test-Path -LiteralPath $path -PathType Leaf) {
-        if ((Split-Path -Leaf $path) -ieq 'cc-switch.db') {
+        $leaf = Split-Path -Leaf $path
+        $extension = [System.IO.Path]::GetExtension($leaf)
+        if ($leaf -ieq 'cc-switch.db' -or $extension -ieq '.db') {
             return (Resolve-Path -LiteralPath $path).Path
         }
         $path = Split-Path -Parent $path
@@ -426,23 +429,43 @@ function Quote-Sql {
     return "'" + ($Value -replace "'", "''") + "'"
 }
 
-function Invoke-SqlJson {
-    param([Parameter(Mandatory)][string]$Sql)
+function Invoke-SqliteJson {
+    param(
+        [Parameter(Mandatory)][string]$DatabasePath,
+        [Parameter(Mandatory)][string]$Sql,
+        [string]$Context = 'SQLite'
+    )
 
-    Assert-CodexHomeReady
-    $raw = & $script:Sqlite -json $script:StateDb $Sql
-    if ($LASTEXITCODE -ne 0) {
-        throw "sqlite3 failed with exit code $LASTEXITCODE."
+    if ([string]::IsNullOrWhiteSpace($DatabasePath) -or -not (Test-Path -LiteralPath $DatabasePath -PathType Leaf)) {
+        throw "$Context 数据库不存在：$DatabasePath"
     }
 
-    $text = ($raw -join [Environment]::NewLine).Trim()
+    $output = & $script:Sqlite -json $DatabasePath $Sql 2>&1
+    $exitCode = $LASTEXITCODE
+    $text = ($output | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.ToString() } else { [string]$_ }
+        }) -join [Environment]::NewLine
+    $text = $text.Trim()
+
+    if ($exitCode -ne 0) {
+        if ([string]::IsNullOrWhiteSpace($text)) { $text = "sqlite3 exit code $exitCode" }
+        throw "$Context 查询失败：$text"
+    }
     if ([string]::IsNullOrWhiteSpace($text)) { return @() }
+
     try {
         return ($text | ConvertFrom-Json)
     }
     catch {
-        throw "解析 Codex 本地数据库输出失败。已启用 UTF-8，如果仍出现这个错误，请重启 GUI 后再试。原始错误：$($_.Exception.Message)"
+        throw "$Context 输出解析失败：$($_.Exception.Message)"
     }
+}
+
+function Invoke-SqlJson {
+    param([Parameter(Mandatory)][string]$Sql)
+
+    Assert-CodexHomeReady
+    return (Invoke-SqliteJson -DatabasePath $script:StateDb -Sql $Sql -Context 'Codex 本地数据库')
 }
 
 function Invoke-CcSwitchSqlJson {
@@ -452,14 +475,7 @@ function Invoke-CcSwitchSqlJson {
         throw '未找到 cc-switch.db。历史记录同步仍可使用；如需切换账号并启动，请把工具放到 cc-switch 目录，或用 -CcSwitchHome 指定 cc-switch 安装目录。'
     }
 
-    $raw = & $script:Sqlite -json $script:CcSwitchDb $Sql
-    if ($LASTEXITCODE -ne 0) {
-        throw "sqlite3 failed with exit code $LASTEXITCODE."
-    }
-
-    $text = ($raw -join [Environment]::NewLine).Trim()
-    if ([string]::IsNullOrWhiteSpace($text)) { return @() }
-    return ($text | ConvertFrom-Json)
+    return (Invoke-SqliteJson -DatabasePath $script:CcSwitchDb -Sql $Sql -Context 'cc-switch.db')
 }
 
 function Convert-CodexPath {
@@ -517,11 +533,66 @@ function Get-CcSwitchCodexProviders {
         return @()
     }
 
-    return @(Invoke-CcSwitchSqlJson @"
-SELECT id, name, settings_config, is_current
+    return @(Get-CcSwitchCodexProvidersFromDatabase -DatabasePath $script:CcSwitchDb)
+}
+
+function Get-SqliteTableColumns {
+    param(
+        [Parameter(Mandatory)][string]$DatabasePath,
+        [Parameter(Mandatory)][string]$TableName
+    )
+
+    if ($TableName -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') {
+        throw "SQLite 表名不合法：$TableName"
+    }
+
+    $columns = @{}
+    foreach ($row in @(Invoke-SqliteJson -DatabasePath $DatabasePath -Sql "PRAGMA table_info($TableName);" -Context 'cc-switch.db')) {
+        $name = [string]$row.name
+        if (-not [string]::IsNullOrWhiteSpace($name)) {
+            $columns[$name.ToLowerInvariant()] = $true
+        }
+    }
+    return $columns
+}
+
+function Test-SqliteColumn {
+    param(
+        [Parameter(Mandatory)]$Columns,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    return $Columns.ContainsKey($Name.ToLowerInvariant())
+}
+
+function Get-CcSwitchCodexProvidersFromDatabase {
+    param([Parameter(Mandatory)][string]$DatabasePath)
+
+    $columns = Get-SqliteTableColumns -DatabasePath $DatabasePath -TableName 'providers'
+    if ($columns.Count -eq 0) {
+        throw '所选数据库不是 cc-switch 数据库：找不到 providers 表。请确认选择的是 cc-switch.db 或同结构的 .db 文件。'
+    }
+
+    $missing = @()
+    foreach ($name in @('id', 'name', 'settings_config', 'app_type')) {
+        if (-not (Test-SqliteColumn -Columns $columns -Name $name)) { $missing += $name }
+    }
+    if ($missing.Count -gt 0) {
+        throw "所选数据库不是支持的 cc-switch 数据库：providers 表缺少字段 $($missing -join ', ')。"
+    }
+
+    $isCurrentSelect = if (Test-SqliteColumn -Columns $columns -Name 'is_current') { 'is_current' } else { '0 AS is_current' }
+    $orderParts = @()
+    if (Test-SqliteColumn -Columns $columns -Name 'is_current') { $orderParts += 'is_current DESC' }
+    if (Test-SqliteColumn -Columns $columns -Name 'sort_index') { $orderParts += 'sort_index ASC' }
+    $orderParts += 'name ASC'
+    $orderClause = $orderParts -join ', '
+
+    return @(Invoke-SqliteJson -DatabasePath $DatabasePath -Sql @"
+SELECT id, name, settings_config, $isCurrentSelect
 FROM providers
 WHERE app_type = 'codex'
-ORDER BY is_current DESC, sort_index ASC, name ASC;
+ORDER BY $orderClause;
 "@)
 }
 
@@ -1313,6 +1384,37 @@ function Show-GuiError {
     [System.Windows.Forms.MessageBox]::Show($message, '错误', 'OK', 'Error') | Out-Null
 }
 
+function Show-UnhandledGuiException {
+    param([AllowNull()][Exception]$Exception)
+
+    $message = if ($Exception) { $Exception.Message } else { '未知界面异常' }
+    try {
+        if ($script:OutputBox -and -not $script:OutputBox.IsDisposed) {
+            Append-Log "已拦截界面异常，程序会继续运行：$message"
+        }
+    }
+    catch { }
+
+    if ($SelfTest) {
+        throw $message
+    }
+
+    try {
+        [System.Windows.Forms.MessageBox]::Show(
+            "已拦截界面异常，程序会继续运行。`r`n`r`n$message",
+            '错误',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+    }
+    catch { }
+}
+
+[System.Windows.Forms.Application]::add_ThreadException({
+        param($sender, $eventArgs)
+        Show-UnhandledGuiException -Exception $eventArgs.Exception
+    })
+
 function Show-MainWindow {
     if (-not $script:Form -or $script:Form.IsDisposed) { return }
 
@@ -1570,19 +1672,33 @@ function Select-CodexHomeFolder {
 }
 
 function Set-CcSwitchHomeFromSelection {
-    param([Parameter(Mandatory)][string]$SelectedPath)
+    param(
+        [Parameter(Mandatory)][string]$SelectedPath,
+        [switch]$SkipConfigSync
+    )
 
     $resolved = Resolve-CcSwitchDbFromSelection $SelectedPath
     if ([string]::IsNullOrWhiteSpace($resolved)) {
-        throw "没有在所选目录或其父目录中找到 cc-switch.db。`r`n`r`n$(Get-CcSwitchHomeHelpText)"
+        throw "没有在所选目录或其父目录中找到 cc-switch.db，也没有选中可识别的 .db 文件。`r`n`r`n$(Get-CcSwitchHomeHelpText)"
     }
 
+    $providers = @(Get-CcSwitchCodexProvidersFromDatabase -DatabasePath $resolved)
     $script:CcSwitchDb = $resolved
     $script:CcSwitchSettingsPath = Join-Path (Split-Path -Parent $script:CcSwitchDb) 'settings.json'
     Append-Log "已加载 cc-switch.db 文件：$script:CcSwitchDb"
+    if ($providers.Count -eq 0) {
+        Append-Log '所选数据库可读取，但暂未发现 app_type=codex 的 cc-switch 供应商。请先在 cc-switch 中新增并保存 Codex 节点。'
+    }
     Refresh-Providers
     Save-AppState
-    Sync-AppConfigFileWithDetectedInfo -CreateIfMissing -ForceCurrentCcSwitchHome
+    if (-not $SkipConfigSync) {
+        try {
+            Sync-AppConfigFileWithDetectedInfo -CreateIfMissing -ForceCurrentCcSwitchHome
+        }
+        catch {
+            Append-Log "写入软件配置文件失败，但 cc-switch.db 已加载：$($_.Exception.Message)"
+        }
+    }
 }
 
 function Select-CcSwitchHomeFolder {
@@ -1829,7 +1945,7 @@ function Import-AppConfig {
             Set-CodexHomeFromSelection $codexHomeValue
         }
         if (-not [string]::IsNullOrWhiteSpace($ccSwitchHomeValue)) {
-            Set-CcSwitchHomeFromSelection $ccSwitchHomeValue
+            Set-CcSwitchHomeFromSelection -SelectedPath $ccSwitchHomeValue -SkipConfigSync
         }
 
         Refresh-Providers
@@ -1908,7 +2024,17 @@ function Get-DetectedCodexHistoryProvidersForConfig {
 
 function Get-DetectedCcSwitchNodesForConfig {
     $nodes = @()
-    foreach ($row in @(Get-CcSwitchCodexProviders)) {
+    try {
+        $rows = @(Get-CcSwitchCodexProviders)
+    }
+    catch {
+        if ($script:OutputBox) {
+            Append-Log "读取 cc-switch 节点列表失败，软件配置文件将暂不写入节点参考：$($_.Exception.Message)"
+        }
+        return @()
+    }
+
+    foreach ($row in $rows) {
         $nodes += [pscustomobject][ordered]@{
             id              = [string]$row.id
             name            = [string]$row.name

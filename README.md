@@ -104,7 +104,7 @@ The GUI opens with these main controls:
 | `加载codex账号` | Manually load the `.codex` folder that contains `state_5.sqlite` |
 | `打开聊天内容` | Open the selected chat's rollout folder; if no chat is selected, open `.codex\sessions` |
 | `codex目录` | Open the current Codex history root directory |
-| `加载cc-switch.db文件` | Manually load `cc-switch.db`, so the GUI can read Codex launch providers such as Any Router and RightCode |
+| `加载cc-switch.db文件` | Manually load `cc-switch.db` or a compatible `.db` file, so the GUI can read Codex launch providers such as Any Router and RightCode |
 | `完全访问(-a never)` | Add `-a never` when launching Codex from the terminal |
 | 表格右键菜单 | Launch a terminal, launch with the current chat, sync this/checked/all rows to the target account, open directories, or copy row values |
 
@@ -196,7 +196,7 @@ The tool searches for `cc-switch.db` in these places:
 4. `%LOCALAPPDATA%\cc-switch\cc-switch.db`.
 5. `%APPDATA%\cc-switch\cc-switch.db`.
 
-If automatic discovery fails, use `加载cc-switch.db文件` and select `cc-switch.db`.
+If automatic discovery fails, use `加载cc-switch.db文件` and select `cc-switch.db` or a compatible `.db` file.
 
 ## Completion Popup
 
@@ -275,7 +275,7 @@ If a sync fails because a rollout file is being written, close or pause active C
 
 If Codex startup shows `MCP client for node_repl failed to start`, the usual cause is a stale Codex Desktop runtime path after an app update. When the GUI switches nodes or enables completion popups, it automatically repairs the `node_repl.exe`, `node.exe`, `node_modules`, and `codex.exe` paths in `config.toml`.
 
-If cc-switch providers do not appear, click `加载cc-switch.db文件` and choose `cc-switch.db`.
+If cc-switch providers do not appear, click `加载cc-switch.db文件` and choose `cc-switch.db` or a compatible `.db` file.
 
 ## Development Notes
 
