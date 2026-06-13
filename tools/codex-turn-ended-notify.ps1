@@ -6,6 +6,7 @@ param(
     [int]$Seconds = 12,
     [string]$ForwardBase64,
     [string]$CodexHome,
+    [switch]$ForwardOnly,
     [switch]$SelfTest,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$RemainingArgs
@@ -406,12 +407,72 @@ function Invoke-ForwardNotify {
     }
 }
 
+function Test-ShouldSuppressDuplicateNotification {
+    param(
+        [AllowNull()][string]$Home,
+        [AllowNull()][string]$NotificationMessage
+    )
+
+    try {
+        $resolvedHome = Resolve-CodexHome $Home
+        if ([string]::IsNullOrWhiteSpace($resolvedHome)) { $resolvedHome = [string]$Home }
+        $normalizedMessage = ([string]$NotificationMessage -replace '\s+', ' ').Trim()
+        if ([string]::IsNullOrWhiteSpace($normalizedMessage)) { $normalizedMessage = [string]$Title }
+
+        $hashInput = "$resolvedHome`n$normalizedMessage"
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $hashBytes = $sha.ComputeHash($utf8.GetBytes($hashInput))
+        }
+        finally {
+            $sha.Dispose()
+        }
+        $hash = ([BitConverter]::ToString($hashBytes) -replace '-', '').Substring(0, 24)
+        $dedupeDir = Join-Path ([System.IO.Path]::GetTempPath()) 'codex-history-sync-notify'
+        New-Item -ItemType Directory -Path $dedupeDir -Force | Out-Null
+
+        $now = [DateTime]::UtcNow
+        foreach ($oldFile in @(Get-ChildItem -LiteralPath $dedupeDir -Filter '*.lock' -ErrorAction SilentlyContinue)) {
+            if (($now - $oldFile.LastWriteTimeUtc).TotalHours -gt 12) {
+                Remove-Item -LiteralPath $oldFile.FullName -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        $lockPath = Join-Path $dedupeDir "$hash.lock"
+        if (Test-Path -LiteralPath $lockPath) {
+            $ageSeconds = ($now - (Get-Item -LiteralPath $lockPath).LastWriteTimeUtc).TotalSeconds
+            if ($ageSeconds -lt 6) { return $true }
+            Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+        }
+
+        try {
+            $stream = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+            $stream.Dispose()
+            return $false
+        }
+        catch {
+            return (Test-Path -LiteralPath $lockPath)
+        }
+    }
+    catch {
+        return $false
+    }
+}
+
 if ($SelfTest) {
     Write-Output 'Notifier SelfTest OK.'
     return
 }
 
 Invoke-ForwardNotify -EncodedCommand $ForwardBase64 -ExtraArgs $RemainingArgs
+
+if ($ForwardOnly) {
+    return
+}
+
+if (Test-ShouldSuppressDuplicateNotification -Home $CodexHome -NotificationMessage $Message) {
+    return
+}
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing

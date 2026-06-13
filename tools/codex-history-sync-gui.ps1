@@ -31,7 +31,7 @@ public static class CodexHistorySyncWindow {
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$script:AppVersion = '2026.06.13.15'
+$script:AppVersion = '2026.06.13.16'
 $script:AppAuthor = 'Joff Pan'
 $script:GitHubRepo = 'zhuofupan/codex-history-sync-portable'
 $script:GitHubUrl = "https://github.com/$script:GitHubRepo"
@@ -2987,6 +2987,7 @@ function Set-CodexTurnEndedNotify {
     if (-not [string]::IsNullOrWhiteSpace($forwardBase64)) {
         $notifyArgs += @('-ForwardBase64', $forwardBase64)
     }
+    $notifyArgs += '-ForwardOnly'
 
     $notifyLine = 'notify = [ ' + (($notifyArgs | ForEach-Object { ConvertTo-TomlBasicString ([string]$_) }) -join ', ') + ' ]'
     $pattern = '(?m)^\s*notify\s*=\s*\[[^\r\n]*\]\s*$'
@@ -3062,14 +3063,15 @@ function Show-TestTurnEndedNotify {
 
 function Stop-ExistingTurnCompleteMonitor {
     try {
-        $escapedPs1 = [regex]::Escape($script:TurnCompleteMonitorPath)
-        $escapedVbs = [regex]::Escape($script:TurnCompleteMonitorLauncherPath)
         $currentPid = [System.Diagnostics.Process]::GetCurrentProcess().Id
         $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
             Where-Object {
                 $_.ProcessId -ne $currentPid -and
                 -not [string]::IsNullOrWhiteSpace([string]$_.CommandLine) -and
-                ($_.CommandLine -match $escapedPs1 -or $_.CommandLine -match $escapedVbs)
+                (
+                    $_.CommandLine -match 'codex-turn-complete-monitor\.ps1' -or
+                    $_.CommandLine -match 'codex-turn-complete-monitor\.vbs'
+                )
             })
         foreach ($process in $processes) {
             try {
@@ -3078,6 +3080,9 @@ function Stop-ExistingTurnCompleteMonitor {
             catch {
                 try { Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction SilentlyContinue } catch { }
             }
+        }
+        if ($processes.Count -gt 0) {
+            Append-Log "已清理旧版桌面完成监控进程：$($processes.Count) 个。"
         }
     }
     catch {
@@ -3309,6 +3314,9 @@ function Invoke-LaunchForProvider {
     }
 
     Switch-CodexProviderById $providerId | Out-Null
+    if ($script:TurnEndedNotifyBox -and [bool]$script:TurnEndedNotifyBox.Checked) {
+        Start-TurnCompleteMonitor
+    }
     Add-CodexProjectTrust -Directory $directory
     $disableApps = [bool]$script:DisableCodexAppsOnFast -and ((Get-CodexServiceTier (Get-Content -LiteralPath (Join-Path $CodexHome 'config.toml') -Raw)) -eq 'fast')
     $preferPowerShell = $script:UsePowerShellLaunchBox -and [bool]$script:UsePowerShellLaunchBox.Checked
