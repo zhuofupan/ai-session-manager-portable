@@ -31,7 +31,7 @@ public static class CodexHistorySyncWindow {
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$script:AppVersion = '2026.06.13.10'
+$script:AppVersion = '2026.06.13.11'
 $script:AppAuthor = 'zhuofupan'
 $script:GitHubRepo = 'zhuofupan/codex-history-sync-portable'
 $script:GitHubUrl = "https://github.com/$script:GitHubRepo"
@@ -204,7 +204,7 @@ function Get-CcSwitchHomeHelpText {
 如果自动加载不到新增账号：
 - 先在 cc-switch 里确认已经新增并保存 Codex 节点
 - 回到本工具点击【刷新】
-- 仍然没有时，点击【导入cc-switch配置】，选择包含 cc-switch.db 的目录
+- 仍然没有时，点击【导入cc配置】，选择包含 cc-switch.db 的目录
 
 找不到时可以用 Everything 搜索 cc-switch.db，然后选择这个文件所在的目录。
 "@
@@ -260,6 +260,127 @@ $script:CcSwitchDb = Resolve-CcSwitchDb $CcSwitchHome
 $script:CcSwitchSettingsPath = if ($script:CcSwitchDb) { Join-Path (Split-Path -Parent $script:CcSwitchDb) 'settings.json' } else { $null }
 $script:StateDb = if ($CodexHome) { Join-Path $CodexHome 'state_5.sqlite' } else { $null }
 $script:AllCwdLabel = '全部目录'
+$script:UiLanguage = 'zh-CN'
+$script:UiStrings = @{
+    'zh-CN' = @{
+        AllFolders           = '全部目录'
+        FormTitle            = 'Codex 历史记录同步'
+        HeaderTitle          = 'Codex 历史记录同步'
+        HeaderSubtitle       = '本地记录迁移、节点启动和完成提醒'
+        AuthorLabel          = '作者'
+        LanguageLabel        = '语言'
+        GroupHistory         = '历史筛选'
+        GroupSync            = '同步操作'
+        GroupPath            = '目录与配置'
+        GroupLaunch          = '启动与提醒'
+        GroupSupport         = '帮助与更新'
+        SourceProvider       = 'Codex源账号'
+        TargetProvider       = 'Codex目标账号'
+        DirectoryFilter      = '目录筛选'
+        DisplayLimit         = '显示条数'
+        CcSwitchProvider     = 'cc-switch供应商'
+        Archived             = '归档'
+        Refresh              = '刷新'
+        SelectAll            = '全选'
+        ClearSelection       = '清空'
+        CloneChecked         = '同步勾选'
+        SyncAll              = '同步全部'
+        Mirror               = '双向同步'
+        Swap                 = '交换'
+        AddHistory           = '增加聊天记录'
+        OpenChatDir          = '打开聊天目录'
+        CodexDir             = 'codex目录'
+        ImportCcConfig       = '导入cc配置'
+        Settings             = '软件设置'
+        LaunchTerminal       = '从终端启动'
+        LoadCheckedRecord    = '按勾选加载记录'
+        PowerShellLaunch     = 'PowerShell启动'
+        CompletionPopup      = '完成弹窗'
+        TestPopup            = '测试弹窗'
+        Help                 = '帮助'
+        CheckUpdate          = '检查更新'
+        GridSelect           = '选择'
+        GridUpdated          = '更新时间'
+        GridProvider         = '账号'
+        GridArchived         = '已归档'
+        GridThreadId         = '线程 ID'
+        GridCwd              = '工作目录'
+        GridTitle            = '标题'
+        GridRollout          = '记录文件'
+        MenuOpenChatDir      = '打开聊天目录'
+        MenuOpenWorkspace    = '打开工作目录'
+        MenuCopyCell         = '复制当前单元格'
+        MenuCopyId           = '复制线程 ID'
+        MenuCopyCwd          = '复制工作目录'
+        MenuCopyTitle        = '复制标题'
+        MenuCheck            = '勾选此记录'
+        MenuUncheck          = '取消勾选此记录'
+        MenuCheckOnly        = '只勾选此记录'
+        MenuResume           = '从终端恢复此记录'
+        MenuSyncCurrent      = '同步此记录到目标账号'
+        MenuSyncChecked      = '同步当前勾选到目标账号'
+        StatusReady          = '就绪'
+    }
+    'en-US' = @{
+        AllFolders           = 'All folders'
+        FormTitle            = 'Codex History Sync'
+        HeaderTitle          = 'Codex History Sync'
+        HeaderSubtitle       = 'Local history migration, provider launch, and completion alerts'
+        AuthorLabel          = 'Author'
+        LanguageLabel        = 'Language'
+        GroupHistory         = 'History Filter'
+        GroupSync            = 'Sync Actions'
+        GroupPath            = 'Paths & Config'
+        GroupLaunch          = 'Launch & Alerts'
+        GroupSupport         = 'Help & Update'
+        SourceProvider       = 'Codex Source'
+        TargetProvider       = 'Codex Target'
+        DirectoryFilter      = 'Directory'
+        DisplayLimit         = 'Rows'
+        CcSwitchProvider     = 'cc-switch Provider'
+        Archived             = 'Archived'
+        Refresh              = 'Refresh'
+        SelectAll            = 'Select All'
+        ClearSelection       = 'Clear'
+        CloneChecked         = 'Sync Checked'
+        SyncAll              = 'Sync All'
+        Mirror               = 'Two-way Sync'
+        Swap                 = 'Swap'
+        AddHistory           = 'Add History'
+        OpenChatDir          = 'Open Chat Dir'
+        CodexDir             = 'Codex Dir'
+        ImportCcConfig       = 'Import cc Config'
+        Settings             = 'Settings'
+        LaunchTerminal       = 'Launch Terminal'
+        LoadCheckedRecord    = 'Load Checked'
+        PowerShellLaunch     = 'PowerShell'
+        CompletionPopup      = 'Popup'
+        TestPopup            = 'Test Popup'
+        Help                 = 'Help'
+        CheckUpdate          = 'Check Update'
+        GridSelect           = 'Select'
+        GridUpdated          = 'Updated'
+        GridProvider         = 'Provider'
+        GridArchived         = 'Archived'
+        GridThreadId         = 'Thread ID'
+        GridCwd              = 'Workspace'
+        GridTitle            = 'Title'
+        GridRollout          = 'Record File'
+        MenuOpenChatDir      = 'Open Chat Directory'
+        MenuOpenWorkspace    = 'Open Workspace'
+        MenuCopyCell         = 'Copy Cell'
+        MenuCopyId           = 'Copy Thread ID'
+        MenuCopyCwd          = 'Copy Workspace'
+        MenuCopyTitle        = 'Copy Title'
+        MenuCheck            = 'Check This Row'
+        MenuUncheck          = 'Uncheck This Row'
+        MenuCheckOnly        = 'Only Check This Row'
+        MenuResume           = 'Resume in Terminal'
+        MenuSyncCurrent      = 'Sync This Row to Target'
+        MenuSyncChecked      = 'Sync Checked Rows to Target'
+        StatusReady          = 'Ready'
+    }
+}
 
 function Resolve-ToolPath {
     param([string]$Name)
@@ -701,6 +822,312 @@ function New-GroupBox {
     return $group
 }
 
+function Get-UiText {
+    param([Parameter(Mandatory)][string]$Key)
+
+    $language = if ($script:UiStrings.ContainsKey($script:UiLanguage)) { $script:UiLanguage } else { 'zh-CN' }
+    if ($script:UiStrings[$language].ContainsKey($Key)) {
+        return [string]$script:UiStrings[$language][$Key]
+    }
+    if ($script:UiStrings['zh-CN'].ContainsKey($Key)) {
+        return [string]$script:UiStrings['zh-CN'][$Key]
+    }
+    return $Key
+}
+
+function Normalize-UiLanguage {
+    param([AllowNull()][string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return 'zh-CN' }
+    $value = $Value.Trim()
+    if ($value -match '^(en|english|en-us)$') { return 'en-US' }
+    if ($value -match '^(zh|cn|chinese|zh-cn|中文)$') { return 'zh-CN' }
+    if ($script:UiStrings.ContainsKey($value)) { return $value }
+    return 'zh-CN'
+}
+
+function Get-LanguageDisplayText {
+    param([Parameter(Mandatory)][string]$Language)
+
+    if ($Language -eq 'en-US') { return 'English' }
+    return '中文'
+}
+
+function Get-LanguageFromDisplayText {
+    param([AllowNull()][string]$Text)
+
+    if ([string]::Equals($Text, 'English', [System.StringComparison]::OrdinalIgnoreCase)) { return 'en-US' }
+    return 'zh-CN'
+}
+
+function Measure-UiTextWidth {
+    param(
+        [AllowNull()][string]$Text,
+        [Parameter(Mandatory)]$Font,
+        [int]$Extra = 0
+    )
+
+    if ($null -eq $Text) { $Text = '' }
+    return [System.Windows.Forms.TextRenderer]::MeasureText([string]$Text, $Font).Width + $Extra
+}
+
+function Set-ControlText {
+    param(
+        [Parameter(Mandatory)]$Control,
+        [Parameter(Mandatory)][string]$Key
+    )
+
+    if ($Control) {
+        $Control.Text = Get-UiText $Key
+    }
+}
+
+function Set-ControlWidthForText {
+    param(
+        [Parameter(Mandatory)]$Control,
+        [int]$MinWidth = 70,
+        [int]$Extra = 28
+    )
+
+    if (-not $Control) { return }
+    $width = [Math]::Max($MinWidth, (Measure-UiTextWidth -Text ([string]$Control.Text) -Font $Control.Font -Extra $Extra))
+    $Control.Size = New-Object System.Drawing.Size($width, $Control.Height)
+}
+
+function Move-Control {
+    param(
+        [Parameter(Mandatory)]$Control,
+        [int]$X,
+        [int]$Y,
+        [AllowNull()][int]$Width,
+        [AllowNull()][int]$Height
+    )
+
+    if (-not $Control) { return }
+    $newWidth = if ($PSBoundParameters.ContainsKey('Width')) { $Width } else { $Control.Width }
+    $newHeight = if ($PSBoundParameters.ContainsKey('Height')) { $Height } else { $Control.Height }
+    $Control.Location = New-Object System.Drawing.Point($X, $Y)
+    $Control.Size = New-Object System.Drawing.Size($newWidth, $newHeight)
+}
+
+function Resize-GroupToFitControls {
+    param(
+        [Parameter(Mandatory)]$Group,
+        [int]$MinWidth = 100,
+        [int]$MinHeight = 58,
+        [int]$RightPadding = 14,
+        [int]$BottomPadding = 8
+    )
+
+    $maxRight = 0
+    $maxBottom = 0
+    foreach ($control in $Group.Controls) {
+        $maxRight = [Math]::Max($maxRight, $control.Right)
+        $maxBottom = [Math]::Max($maxBottom, $control.Bottom)
+    }
+
+    $Group.Size = New-Object System.Drawing.Size(
+        [Math]::Max($MinWidth, $maxRight + $RightPadding),
+        [Math]::Max($MinHeight, $maxBottom + $BottomPadding)
+    )
+}
+
+function Layout-HeaderMeta {
+    if (-not $headerPanel -or -not $headerMeta -or -not $headerGitHub) { return }
+
+    $githubWidth = [Math]::Max(64, (Measure-UiTextWidth -Text ([string]$headerGitHub.Text) -Font $headerGitHub.Font -Extra 10))
+    $right = [Math]::Max(1000, $headerPanel.ClientSize.Width) - 28
+    $headerGitHub.Size = New-Object System.Drawing.Size($githubWidth, 22)
+    $headerGitHub.Location = New-Object System.Drawing.Point(($right - $githubWidth), 20)
+
+    $metaWidth = 430
+    $headerMeta.Size = New-Object System.Drawing.Size($metaWidth, 22)
+    $headerMeta.Location = New-Object System.Drawing.Point(($headerGitHub.Left - $metaWidth - 4), 20)
+}
+
+function Layout-ToolbarGroups {
+    if (-not $historyGroup -or -not $syncGroup -or -not $pathGroup -or -not $launchGroup -or -not $supportGroup) { return }
+
+    foreach ($button in @(
+            $swapButton, $refreshButton, $selectAllButton, $clearSelectionButton, $cloneButton, $syncButton, $mirrorButton,
+            $selectCodexHomeButton, $openRecordFolderButton, $openCodexFolderButton, $selectCcSwitchHomeButton, $openConfigButton,
+            $openCodexButton, $testNotifyButton, $helpButton, $updateButton
+        )) {
+        Set-ControlWidthForText -Control $button -MinWidth 58 -Extra 30
+    }
+    foreach ($check in @($script:IncludeArchivedBox, $script:LoadCheckedRecordBox, $script:UsePowerShellLaunchBox, $script:TurnEndedNotifyBox)) {
+        Set-ControlWidthForText -Control $check -MinWidth 58 -Extra 28
+    }
+    foreach ($label in @($sourceLabel, $targetLabel, $cwdLabel, $limitLabel, $ccProviderLabel, $languageLabel)) {
+        Set-ControlWidthForText -Control $label -MinWidth 42 -Extra 8
+    }
+
+    Move-Control $sourceLabel 14 24
+    Move-Control $script:SourceCombo ($sourceLabel.Right + 6) 24 118 24
+    Move-Control $targetLabel ($script:SourceCombo.Right + 12) 24
+    Move-Control $script:TargetCombo ($targetLabel.Right + 6) 24 118 24
+    Move-Control $swapButton ($script:TargetCombo.Right + 10) 22
+    Move-Control $cwdLabel 14 54
+    Move-Control $script:CwdCombo ($cwdLabel.Right + 6) 54 222 24
+    Move-Control $limitLabel ($script:CwdCombo.Right + 12) 54
+    Move-Control $script:LimitBox ($limitLabel.Right + 6) 54 58 24
+    Move-Control $script:IncludeArchivedBox ($script:LimitBox.Right + 8) 55
+    Resize-GroupToFitControls -Group $historyGroup -MinWidth 508 -MinHeight 86
+
+    $x = 14
+    foreach ($button in @($refreshButton, $selectAllButton, $clearSelectionButton, $cloneButton)) {
+        Move-Control $button $x 24
+        $x = $button.Right + 8
+    }
+    $x = 14
+    foreach ($button in @($syncButton, $mirrorButton)) {
+        Move-Control $button $x 54
+        $x = $button.Right + 8
+    }
+    Resize-GroupToFitControls -Group $syncGroup -MinWidth 328 -MinHeight 86
+
+    $x = 14
+    foreach ($button in @($selectCodexHomeButton, $openRecordFolderButton, $openCodexFolderButton)) {
+        Move-Control $button $x 24
+        $x = $button.Right + 10
+    }
+    $x = 14
+    foreach ($button in @($selectCcSwitchHomeButton, $openConfigButton)) {
+        Move-Control $button $x 54
+        $x = $button.Right + 10
+    }
+    Resize-GroupToFitControls -Group $pathGroup -MinWidth 420 -MinHeight 86
+
+    Move-Control $ccProviderLabel 14 24
+    Move-Control $script:CodexProviderCombo ($ccProviderLabel.Right + 6) 24 170 24
+    Move-Control $openCodexButton ($script:CodexProviderCombo.Right + 12) 22
+    Move-Control $script:LoadCheckedRecordBox ($openCodexButton.Right + 12) 25
+    Move-Control $script:UsePowerShellLaunchBox ($script:LoadCheckedRecordBox.Right + 12) 25
+    Move-Control $script:TurnEndedNotifyBox ($script:UsePowerShellLaunchBox.Right + 12) 25
+    Move-Control $testNotifyButton ($script:TurnEndedNotifyBox.Right + 12) 22
+    Resize-GroupToFitControls -Group $launchGroup -MinWidth 880 -MinHeight 58
+
+    Move-Control $helpButton 14 22
+    Move-Control $updateButton ($helpButton.Right + 10) 22
+    Move-Control $languageLabel ($updateButton.Right + 14) 24
+    Move-Control $script:LanguageCombo ($languageLabel.Right + 6) 24 88 24
+    Resize-GroupToFitControls -Group $supportGroup -MinWidth 226 -MinHeight 58
+
+    $gap = 12
+    $historyGroup.Location = New-Object System.Drawing.Point(12, 70)
+    $syncGroup.Location = New-Object System.Drawing.Point(($historyGroup.Right + $gap), 70)
+    $pathGroup.Location = New-Object System.Drawing.Point(($syncGroup.Right + $gap), 70)
+    $launchGroup.Location = New-Object System.Drawing.Point(12, 166)
+    $supportGroup.Location = New-Object System.Drawing.Point(($launchGroup.Right + $gap), 166)
+
+    $requiredWidth = [Math]::Max($pathGroup.Right, $supportGroup.Right) + 28
+    $newMinWidth = [Math]::Max(1320, $requiredWidth)
+    $script:Form.MinimumSize = New-Object System.Drawing.Size($newMinWidth, 820)
+    if ($script:Form.Width -lt $newMinWidth) {
+        $script:Form.Width = $newMinWidth
+    }
+}
+
+function Apply-UiLanguage {
+    $script:AllCwdLabel = Get-UiText 'AllFolders'
+
+    if ($script:Form) {
+        $script:Form.Text = Get-UiText 'FormTitle'
+    }
+    Set-ControlText $headerTitle 'HeaderTitle'
+    Set-ControlText $headerSubTitle 'HeaderSubtitle'
+    if ($headerMeta) {
+        $headerMeta.Text = "v$script:AppVersion  |  $(Get-UiText 'AuthorLabel') $script:AppAuthor  |"
+    }
+    if ($headerGitHub) { $headerGitHub.Text = 'GitHub' }
+    Set-ControlText $historyGroup 'GroupHistory'
+    Set-ControlText $syncGroup 'GroupSync'
+    Set-ControlText $pathGroup 'GroupPath'
+    Set-ControlText $launchGroup 'GroupLaunch'
+    Set-ControlText $supportGroup 'GroupSupport'
+    Set-ControlText $sourceLabel 'SourceProvider'
+    Set-ControlText $targetLabel 'TargetProvider'
+    Set-ControlText $cwdLabel 'DirectoryFilter'
+    Set-ControlText $limitLabel 'DisplayLimit'
+    Set-ControlText $ccProviderLabel 'CcSwitchProvider'
+    Set-ControlText $languageLabel 'LanguageLabel'
+    Set-ControlText $script:IncludeArchivedBox 'Archived'
+    Set-ControlText $refreshButton 'Refresh'
+    Set-ControlText $selectAllButton 'SelectAll'
+    Set-ControlText $clearSelectionButton 'ClearSelection'
+    Set-ControlText $cloneButton 'CloneChecked'
+    Set-ControlText $syncButton 'SyncAll'
+    Set-ControlText $mirrorButton 'Mirror'
+    Set-ControlText $swapButton 'Swap'
+    Set-ControlText $selectCodexHomeButton 'AddHistory'
+    Set-ControlText $openRecordFolderButton 'OpenChatDir'
+    Set-ControlText $openCodexFolderButton 'CodexDir'
+    Set-ControlText $selectCcSwitchHomeButton 'ImportCcConfig'
+    Set-ControlText $openConfigButton 'Settings'
+    Set-ControlText $openCodexButton 'LaunchTerminal'
+    Set-ControlText $script:LoadCheckedRecordBox 'LoadCheckedRecord'
+    Set-ControlText $script:UsePowerShellLaunchBox 'PowerShellLaunch'
+    Set-ControlText $script:TurnEndedNotifyBox 'CompletionPopup'
+    Set-ControlText $testNotifyButton 'TestPopup'
+    Set-ControlText $helpButton 'Help'
+    Set-ControlText $updateButton 'CheckUpdate'
+
+    if ($script:LanguageCombo) {
+        $script:LanguageCombo.Items.Clear()
+        [void]$script:LanguageCombo.Items.Add('中文')
+        [void]$script:LanguageCombo.Items.Add('English')
+        $script:LanguageCombo.SelectedItem = Get-LanguageDisplayText $script:UiLanguage
+    }
+
+    $gridHeaders = @{
+        Selected    = 'GridSelect'
+        Updated     = 'GridUpdated'
+        Provider    = 'GridProvider'
+        Archived    = 'GridArchived'
+        Id          = 'GridThreadId'
+        Cwd         = 'GridCwd'
+        Title       = 'GridTitle'
+        RolloutPath = 'GridRollout'
+    }
+    foreach ($property in $gridHeaders.Keys) {
+        $column = Get-GridColumnByProperty $property
+        if ($column) {
+            $column.HeaderText = Get-UiText $gridHeaders[$property]
+        }
+    }
+
+    Set-ControlText $gridOpenRecordDirItem 'MenuOpenChatDir'
+    Set-ControlText $gridOpenWorkspaceItem 'MenuOpenWorkspace'
+    Set-ControlText $gridCopyCellItem 'MenuCopyCell'
+    Set-ControlText $gridCopyIdItem 'MenuCopyId'
+    Set-ControlText $gridCopyCwdItem 'MenuCopyCwd'
+    Set-ControlText $gridCopyTitleItem 'MenuCopyTitle'
+    Set-ControlText $gridCheckItem 'MenuCheck'
+    Set-ControlText $gridUncheckItem 'MenuUncheck'
+    Set-ControlText $gridCheckOnlyItem 'MenuCheckOnly'
+    Set-ControlText $gridLaunchItem 'MenuResume'
+    Set-ControlText $gridCloneCurrentItem 'MenuSyncCurrent'
+    Set-ControlText $gridCloneCheckedItem 'MenuSyncChecked'
+
+    if ($script:StatusLabel -and ([string]::IsNullOrWhiteSpace($script:StatusLabel.Text) -or $script:StatusLabel.Text -in @('就绪', 'Ready'))) {
+        $script:StatusLabel.Text = Get-UiText 'StatusReady'
+    }
+
+    Layout-ToolbarGroups
+    Layout-HeaderMeta
+}
+
+function Set-UiLanguage {
+    param([AllowNull()][string]$Language)
+
+    $normalized = Normalize-UiLanguage $Language
+    if ($script:UiLanguage -eq $normalized -and $script:Form) {
+        return
+    }
+    $script:UiLanguage = $normalized
+    Apply-UiLanguage
+}
+
 function New-HeaderImage {
     $bitmap = New-Object System.Drawing.Bitmap 220, 56
     $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
@@ -876,7 +1303,7 @@ $(Get-CodexHomeHelpText)
 
 【cc-switch 节点目录】
 $(Get-CcSwitchHomeHelpText)
-- 【导入cc-switch配置】用于选择包含 cc-switch.db 的 cc-switch 配置目录；软件会从这里读取 Any Router、RightCode、OpenAI Official 等 Codex 节点，用于切换账号和从终端启动。
+- 【导入cc配置】用于选择包含 cc-switch.db 的 cc-switch 配置目录；软件会从这里读取 Any Router、RightCode、OpenAI Official 等 Codex 节点，用于切换账号和从终端启动。
 
 【配置文件】
 - 点击【软件设置】会打开软件根目录下的 codex-history-sync-config.json。
@@ -1127,6 +1554,7 @@ function Get-CurrentAppState {
         turnCompletePopup      = if ($script:TurnEndedNotifyBox) { [bool]$script:TurnEndedNotifyBox.Checked } else { $true }
         usePowerShellTerminal  = if ($script:UsePowerShellLaunchBox) { [bool]$script:UsePowerShellLaunchBox.Checked } else { $false }
         loadCheckedRecordOnLaunch = if ($script:LoadCheckedRecordBox) { [bool]$script:LoadCheckedRecordBox.Checked } else { $true }
+        uiLanguage             = [string]$script:UiLanguage
     }
 }
 
@@ -1190,6 +1618,10 @@ function Import-AppConfig {
         }
         if ($script:LoadCheckedRecordBox) {
             $script:LoadCheckedRecordBox.Checked = Get-ConfigBoolValue -Config $config -Names @('loadCheckedRecordOnLaunch', 'resumeCheckedRecordOnLaunch', 'loadSelectedRecordOnLaunch') -Default ([bool]$script:LoadCheckedRecordBox.Checked)
+        }
+        $language = Get-ConfigStringValue -Config $config -Names @('uiLanguage', 'language')
+        if (-not [string]::IsNullOrWhiteSpace($language)) {
+            Set-UiLanguage $language
         }
         if ($script:LimitBox) {
             $limit = Get-ConfigIntValue -Config $config -Names @('limit', 'displayLimit') -Default ([int]$script:LimitBox.Value)
@@ -1313,6 +1745,7 @@ function New-AppConfigObject {
             defaultCcSwitchNode       = '从终端启动时使用的 cc-switch Codex 节点名字或 id。可参考 knownCcSwitchNodes。'
             usePowerShellTerminal     = 'true 表示从终端启动时优先用 PowerShell；false 表示优先用 CMD。'
             loadCheckedRecordOnLaunch = 'true 表示从终端启动时，如果列表最左侧只勾选了一条记录，就自动恢复该对话；false 表示忽略勾选并在目录下新建对话。'
+            uiLanguage                = '界面语言。zh-CN 表示中文，en-US 表示英文。'
             knownCodexHistoryProviders = '软件自动检测到的历史记录账号列表，只作参考。'
             knownCcSwitchNodes        = '软件自动检测到的 cc-switch Codex 节点列表，只作参考。'
             security                  = '不要在这里写 API key、token、auth.json、config.toml 或 state_5.sqlite 内容。'
@@ -1331,6 +1764,7 @@ function New-AppConfigObject {
         turnCompletePopup          = [bool]$state.turnCompletePopup
         usePowerShellTerminal      = [bool]$state.usePowerShellTerminal
         loadCheckedRecordOnLaunch  = [bool]$state.loadCheckedRecordOnLaunch
+        uiLanguage                 = [string]$state.uiLanguage
         knownCodexHistoryProviders = @(Get-DetectedCodexHistoryProvidersForConfig)
         knownCcSwitchNodes         = @(Get-DetectedCcSwitchNodesForConfig)
     }
@@ -1374,7 +1808,8 @@ function Sync-AppConfigFileWithDetectedInfo {
                     'disableAppsOnFast',
                     'turnCompletePopup',
                     'usePowerShellTerminal',
-                    'loadCheckedRecordOnLaunch'
+                    'loadCheckedRecordOnLaunch',
+                    'uiLanguage'
                 )) {
                 $value = Get-ConfigPropertyValue -Config $existing -Names @($name)
                 if ($null -ne $value -and -not (Test-TemplatePlaceholderValue ([string]$value))) {
@@ -1952,7 +2387,7 @@ function Get-CcSwitchProviderById {
     $safe = Quote-Sql $ProviderId
     $rows = Invoke-CcSwitchSqlJson "select id,name,settings_config from providers where app_type='codex' and id=$safe limit 1;"
     if ($rows.Count -eq 0) {
-        throw "找不到 cc-switch Codex 节点 '$ProviderId'。请点击【导入cc-switch配置】选择包含 cc-switch.db 的目录，然后刷新。"
+        throw "找不到 cc-switch Codex 节点 '$ProviderId'。请点击【导入cc配置】选择包含 cc-switch.db 的目录，然后刷新。"
     }
     return $rows[0]
 }
@@ -2708,7 +3143,7 @@ function Invoke-LaunchForProvider {
     $providerLabel = [string]$Combo.SelectedItem
     $providerId = Resolve-CcSwitchProviderId $providerLabel
     if ([string]::IsNullOrWhiteSpace($providerId)) {
-        throw '请先选择 cc switch节点。若下拉菜单为空，请点击【软件设置】填写 ccSwitchHome 后保存，或点击【导入cc-switch配置】选择包含 cc-switch.db 的目录。'
+        throw '请先选择 cc-switch供应商。若下拉菜单为空，请点击【软件设置】填写 ccSwitchHome 后保存，或点击【导入cc配置】选择包含 cc-switch.db 的目录。'
     }
     $loadCheckedRecord = $script:LoadCheckedRecordBox -and [bool]$script:LoadCheckedRecordBox.Checked
     $resumeSelection = if ($loadCheckedRecord) { Get-LaunchResumeSelection } else { $null }
@@ -3193,13 +3628,15 @@ $headerPanel.Controls.Add($headerGitHub)
 
 $historyGroup = New-GroupBox '历史筛选' 12 70 508 86
 $script:Form.Controls.Add($historyGroup)
-$historyGroup.Controls.Add((New-Label 'Codex源账号' 14 24 76))
+$sourceLabel = New-Label 'Codex源账号' 14 24 76
+$historyGroup.Controls.Add($sourceLabel)
 $script:SourceCombo = New-Object System.Windows.Forms.ComboBox
 $script:SourceCombo.DropDownStyle = 'DropDownList'
 $script:SourceCombo.Location = New-Object System.Drawing.Point(92, 24)
 $script:SourceCombo.Size = New-Object System.Drawing.Size(118, 24)
 $historyGroup.Controls.Add($script:SourceCombo)
-$historyGroup.Controls.Add((New-Label 'Codex目标账号' 218 24 86))
+$targetLabel = New-Label 'Codex目标账号' 218 24 86
+$historyGroup.Controls.Add($targetLabel)
 $script:TargetCombo = New-Object System.Windows.Forms.ComboBox
 $script:TargetCombo.DropDownStyle = 'DropDownList'
 $script:TargetCombo.Location = New-Object System.Drawing.Point(306, 24)
@@ -3207,14 +3644,16 @@ $script:TargetCombo.Size = New-Object System.Drawing.Size(118, 24)
 $historyGroup.Controls.Add($script:TargetCombo)
 $swapButton = New-Button '交换' 434 22 58 'Soft'
 $historyGroup.Controls.Add($swapButton)
-$historyGroup.Controls.Add((New-Label '目录筛选' 14 54 66))
+$cwdLabel = New-Label '目录筛选' 14 54 66
+$historyGroup.Controls.Add($cwdLabel)
 $script:CwdCombo = New-Object System.Windows.Forms.ComboBox
 $script:CwdCombo.DropDownStyle = 'DropDownList'
 $script:CwdCombo.Location = New-Object System.Drawing.Point(82, 54)
 $script:CwdCombo.Size = New-Object System.Drawing.Size(222, 24)
 $script:CwdCombo.DropDownWidth = 900
 $historyGroup.Controls.Add($script:CwdCombo)
-$historyGroup.Controls.Add((New-Label '显示条数' 314 54 64))
+$limitLabel = New-Label '显示条数' 314 54 64
+$historyGroup.Controls.Add($limitLabel)
 $script:LimitBox = New-Object System.Windows.Forms.NumericUpDown
 $script:LimitBox.Location = New-Object System.Drawing.Point(380, 54)
 $script:LimitBox.Size = New-Object System.Drawing.Size(58, 24)
@@ -3248,7 +3687,7 @@ $script:Form.Controls.Add($pathGroup)
 $selectCodexHomeButton = New-Button '增加聊天记录' 14 24 118
 $openRecordFolderButton = New-Button '打开聊天目录' 142 24 118 'Soft'
 $openCodexFolderButton = New-Button 'codex目录' 270 24 112
-$selectCcSwitchHomeButton = New-Button '导入cc-switch配置' 14 54 154
+$selectCcSwitchHomeButton = New-Button '导入cc配置' 14 54 154
 $openConfigButton = New-Button '软件设置' 178 54 112 'Soft'
 $pathGroup.Controls.Add($selectCodexHomeButton)
 $pathGroup.Controls.Add($openRecordFolderButton)
@@ -3258,7 +3697,8 @@ $pathGroup.Controls.Add($openConfigButton)
 
 $launchGroup = New-GroupBox '启动与提醒' 12 166 880 58
 $script:Form.Controls.Add($launchGroup)
-$launchGroup.Controls.Add((New-Label 'cc switch节点' 14 24 92))
+$ccProviderLabel = New-Label 'cc-switch供应商' 14 24 102
+$launchGroup.Controls.Add($ccProviderLabel)
 $script:CodexProviderCombo = New-Object System.Windows.Forms.ComboBox
 $script:CodexProviderCombo.DropDownStyle = 'DropDownList'
 $script:CodexProviderCombo.Location = New-Object System.Drawing.Point(110, 24)
@@ -3291,8 +3731,15 @@ $supportGroup = New-GroupBox '帮助与更新' 904 166 226 58
 $script:Form.Controls.Add($supportGroup)
 $helpButton = New-Button '帮助' 14 22 86 'Soft'
 $updateButton = New-Button '检查更新' 110 22 96
+$languageLabel = New-Label '语言' 220 24 42
+$script:LanguageCombo = New-Object System.Windows.Forms.ComboBox
+$script:LanguageCombo.DropDownStyle = 'DropDownList'
+$script:LanguageCombo.Location = New-Object System.Drawing.Point(266, 24)
+$script:LanguageCombo.Size = New-Object System.Drawing.Size(88, 24)
 $supportGroup.Controls.Add($helpButton)
 $supportGroup.Controls.Add($updateButton)
+$supportGroup.Controls.Add($languageLabel)
+$supportGroup.Controls.Add($script:LanguageCombo)
 
 $script:Grid = New-Object System.Windows.Forms.DataGridView
 
@@ -3459,6 +3906,8 @@ $script:StatusLabel.Anchor = 'Left,Right,Bottom'
 $script:StatusLabel.Text = '就绪'
 $script:Form.Controls.Add($script:StatusLabel)
 
+Apply-UiLanguage
+
 $selectCodexHomeButton.Add_Click({
         try {
             Select-CodexHomeFolder
@@ -3619,6 +4068,12 @@ $script:CodexProviderCombo.Add_SelectedIndexChanged({
             Save-AppState
         }
     })
+$script:LanguageCombo.Add_SelectedIndexChanged({
+        if (-not $script:SuppressThreadRefresh) {
+            Set-UiLanguage (Get-LanguageFromDisplayText ([string]$script:LanguageCombo.SelectedItem))
+            Save-AppState
+        }
+    })
 $script:IncludeArchivedBox.Add_CheckedChanged({
         if (-not $script:SuppressThreadRefresh) {
             Refresh-CwdOptions
@@ -3658,6 +4113,10 @@ $script:Grid.Add_CurrentCellDirtyStateChanged({
         if ($script:Grid.IsCurrentCellDirty) {
             [void]$script:Grid.CommitEdit([System.Windows.Forms.DataGridViewDataErrorContexts]::Commit)
         }
+    })
+
+$script:Form.Add_Resize({
+        Layout-HeaderMeta
     })
 
 $script:Form.Add_FormClosing({
@@ -3701,7 +4160,7 @@ else {
     Append-Log ("尚未加载 Codex 记录目录。请点击 ""增加聊天记录""。" + "`r`n`r`n" + (Get-CodexHomeHelpText))
 }
 if ([string]::IsNullOrWhiteSpace($script:CcSwitchDb)) {
-    Append-Log ("未找到 cc-switch.db：历史同步可用，切换账号启动功能不可用。请点击 ""导入cc-switch配置""，选择包含 cc-switch.db 的目录。" + "`r`n`r`n" + (Get-CcSwitchHomeHelpText))
+    Append-Log ("未找到 cc-switch.db：历史同步可用，切换账号启动功能不可用。请点击 ""导入cc配置""，选择包含 cc-switch.db 的目录。" + "`r`n`r`n" + (Get-CcSwitchHomeHelpText))
 }
 else {
     Append-Log "cc-switch 数据库：$script:CcSwitchDb"

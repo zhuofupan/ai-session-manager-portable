@@ -93,17 +93,18 @@ The GUI opens with these main controls:
 | `同步勾选` | Copy only checked rows |
 | `同步全部` | Copy all listed source rows to the target provider |
 | `双向同步` | Sync both directions between the selected providers |
-| `cc switch节点` | cc-switch Codex node used by `从终端启动` |
+| `cc-switch供应商` | cc-switch Codex provider used by `从终端启动` |
 | `从终端启动` | Open an elevated terminal; the first terminal line shows `[管理员模式]` or `[非管理员]`; start a new chat, or resume the one checked thread when `按勾选加载记录` is enabled |
 | `按勾选加载记录` | When enabled, one checked row launches with `codex resume <thread-id>`; when disabled, checked rows are ignored and a new chat starts in the selected directory |
 | `PowerShell启动` | Prefer PowerShell when checked; prefer CMD when unchecked; fall back automatically if the preferred terminal is unavailable |
+| `语言` | Switch the GUI between Chinese and English |
 | `软件设置` | Open root `codex-history-sync-config.json`; the GUI creates it if missing and reloads it after saves |
 | `帮助` | Show path/account/start/update guidance and copy Everything search terms |
 | `检查更新` | Check GitHub main for a newer version and apply a one-click hot update |
 | `增加聊天记录` | Manually load a `.codex` directory |
 | `打开聊天目录` | Open the selected chat's rollout folder; if no chat is selected, open `.codex\sessions` |
 | `codex目录` | Open the current Codex history root directory |
-| `导入cc-switch配置` | Manually load the cc-switch configuration directory containing `cc-switch.db`, so the GUI can read Codex launch nodes such as Any Router and RightCode |
+| `导入cc配置` | Manually load the cc-switch configuration directory containing `cc-switch.db`, so the GUI can read Codex launch providers such as Any Router and RightCode |
 | 表格右键菜单 | Open chat/work directories, copy row values, check one row, resume one row, or sync selected rows from the table |
 
 ## CLI Usage
@@ -184,7 +185,7 @@ Basic history copying does not strictly require cc-switch; without cc-switch, th
 
 When `cc-switch.db` is available, GUI sync reads the destination Codex node configuration and uses it to rewrite continuation metadata in the target copy. For example, syncing to `custom` reads the `Any Router` node model and reasoning settings, then applies proxy compatibility cleanup to the copied rollout.
 
-If `cc-switch.db` is available, the GUI can read Codex nodes from cc-switch and display them in the `cc switch节点` dropdown. That dropdown is for launching Codex through a selected cc-switch node; the source and target history buckets still come from Codex `model_provider` values.
+If `cc-switch.db` is available, the GUI can read Codex providers from cc-switch and display them in the `cc-switch供应商` dropdown. That dropdown is for launching Codex through a selected cc-switch provider; the source and target history buckets still come from Codex `model_provider` values.
 
 The tool searches for `cc-switch.db` in these places:
 
@@ -194,11 +195,11 @@ The tool searches for `cc-switch.db` in these places:
 4. `%LOCALAPPDATA%\cc-switch\cc-switch.db`.
 5. `%APPDATA%\cc-switch\cc-switch.db`.
 
-If automatic discovery fails, use `导入cc-switch配置` and select the folder containing `cc-switch.db`.
+If automatic discovery fails, use `导入cc配置` and select the folder containing `cc-switch.db`.
 
 ## Completion Popup
 
-The GUI can enable a local completion popup for Codex responses. When `每次完成弹窗` is enabled, the tool:
+The GUI can enable a local completion popup for Codex responses. When `完成弹窗` is enabled, the tool:
 
 - writes the local Codex `notify` setting to use `tools\codex-turn-ended-notify.vbs`;
 - starts `tools\codex-turn-complete-monitor.vbs`;
@@ -273,7 +274,7 @@ If a sync fails because a rollout file is being written, close or pause active C
 
 If Codex startup shows `MCP client for node_repl failed to start`, the usual cause is a stale Codex Desktop runtime path after an app update. When the GUI switches nodes or enables completion popups, it automatically repairs the `node_repl.exe`, `node.exe`, `node_modules`, and `codex.exe` paths in `config.toml`.
 
-If cc-switch nodes do not appear, click `导入cc-switch配置` and choose the directory that contains `cc-switch.db`.
+If cc-switch providers do not appear, click `导入cc配置` and choose the directory that contains `cc-switch.db`.
 
 ## Development Notes
 
