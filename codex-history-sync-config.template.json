@@ -8,11 +8,11 @@
     "defaultTargetProvider": "同步目标 model_provider 桶。",
     "defaultCcSwitchNode": "从终端启动时使用的 cc-switch Codex 节点名字或 id。可参考自动生成配置中的 knownCcSwitchNodes。",
     "usePowerShellTerminal": "true 表示从终端启动时优先用 PowerShell；false 表示优先用 CMD。",
-    "loadCheckedRecordOnLaunch": "true 表示从终端启动时，如果【按勾选加载记录】已开启且列表最左侧只勾选了一条记录，就自动恢复该对话；false 表示忽略勾选并在目录下新建对话。",
+    "loadCheckedRecordOnLaunch": "true 表示从终端启动时，如果【按勾选加载聊天】已开启且列表最左侧只勾选了一条记录，就自动恢复该对话；false 表示忽略勾选并在目录下新建对话。",
     "uiLanguage": "界面语言。zh-CN 表示中文，en-US 表示英文。",
     "security": "不要在这里写 API key、token、auth.json、config.toml 或 state_5.sqlite 内容。"
   },
-  "version": "2026.06.13.11",
+  "version": "2026.06.13.12",
   "codexHome": "",
   "ccSwitchHome": "",
   "codexExe": "",

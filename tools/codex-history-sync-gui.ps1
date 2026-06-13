@@ -31,7 +31,7 @@ public static class CodexHistorySyncWindow {
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$script:AppVersion = '2026.06.13.11'
+$script:AppVersion = '2026.06.13.12'
 $script:AppAuthor = 'zhuofupan'
 $script:GitHubRepo = 'zhuofupan/codex-history-sync-portable'
 $script:GitHubUrl = "https://github.com/$script:GitHubRepo"
@@ -78,7 +78,7 @@ if (-not $SelfTest) {
     $script:GuiInstanceMutex = New-Object System.Threading.Mutex($true, 'Local\CodexHistorySyncPortableGui', [ref]$createdNew)
     if (-not $createdNew) {
         [System.Windows.Forms.MessageBox]::Show(
-            'Codex 历史记录同步已经在运行。请使用已打开的窗口，避免重复启动。后台完成弹窗监控会单独保持运行。',
+            'Codex 历史记录同步已经在运行。请使用已打开的窗口，避免重复启动。后台弹窗提醒监控会单独保持运行。',
             '已经在运行',
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Information
@@ -293,9 +293,9 @@ $script:UiStrings = @{
         ImportCcConfig       = '导入cc配置'
         Settings             = '软件设置'
         LaunchTerminal       = '从终端启动'
-        LoadCheckedRecord    = '按勾选加载记录'
+        LoadCheckedRecord    = '按勾选加载聊天'
         PowerShellLaunch     = 'PowerShell启动'
-        CompletionPopup      = '完成弹窗'
+        CompletionPopup      = '弹窗提醒'
         TestPopup            = '测试弹窗'
         Help                 = '帮助'
         CheckUpdate          = '检查更新'
@@ -304,21 +304,23 @@ $script:UiStrings = @{
         GridProvider         = '账号'
         GridArchived         = '已归档'
         GridThreadId         = '线程 ID'
-        GridCwd              = '工作目录'
-        GridTitle            = '标题'
+        GridCwd              = '项目目录'
+        GridTitle            = '聊天内容'
         GridRollout          = '记录文件'
         MenuOpenChatDir      = '打开聊天目录'
-        MenuOpenWorkspace    = '打开工作目录'
+        MenuOpenWorkspace    = '打开项目目录'
         MenuCopyCell         = '复制当前单元格'
         MenuCopyId           = '复制线程 ID'
-        MenuCopyCwd          = '复制工作目录'
-        MenuCopyTitle        = '复制标题'
+        MenuCopyCwd          = '复制项目目录'
+        MenuCopyTitle        = '复制聊天内容'
         MenuCheck            = '勾选此记录'
         MenuUncheck          = '取消勾选此记录'
         MenuCheckOnly        = '只勾选此记录'
-        MenuResume           = '从终端恢复此记录'
-        MenuSyncCurrent      = '同步此记录到目标账号'
-        MenuSyncChecked      = '同步当前勾选到目标账号'
+        MenuLaunchTerminal   = '启动终端'
+        MenuLaunchWithChat   = '启动终端（+聊天）'
+        MenuSyncCurrent      = '同步至目标账号 [此条]'
+        MenuSyncChecked      = '同步至目标账号 [勾选]'
+        MenuSyncAll          = '同步至目标账号 [所有]'
         StatusReady          = '就绪'
     }
     'en-US' = @{
@@ -352,9 +354,9 @@ $script:UiStrings = @{
         ImportCcConfig       = 'Import cc Config'
         Settings             = 'Settings'
         LaunchTerminal       = 'Launch Terminal'
-        LoadCheckedRecord    = 'Load Checked'
+        LoadCheckedRecord    = 'Load Checked Chat'
         PowerShellLaunch     = 'PowerShell'
-        CompletionPopup      = 'Popup'
+        CompletionPopup      = 'Popup Alert'
         TestPopup            = 'Test Popup'
         Help                 = 'Help'
         CheckUpdate          = 'Check Update'
@@ -363,21 +365,23 @@ $script:UiStrings = @{
         GridProvider         = 'Provider'
         GridArchived         = 'Archived'
         GridThreadId         = 'Thread ID'
-        GridCwd              = 'Workspace'
-        GridTitle            = 'Title'
+        GridCwd              = 'Project Dir'
+        GridTitle            = 'Chat Content'
         GridRollout          = 'Record File'
         MenuOpenChatDir      = 'Open Chat Directory'
-        MenuOpenWorkspace    = 'Open Workspace'
+        MenuOpenWorkspace    = 'Open Project Directory'
         MenuCopyCell         = 'Copy Cell'
         MenuCopyId           = 'Copy Thread ID'
-        MenuCopyCwd          = 'Copy Workspace'
-        MenuCopyTitle        = 'Copy Title'
+        MenuCopyCwd          = 'Copy Project Directory'
+        MenuCopyTitle        = 'Copy Chat Content'
         MenuCheck            = 'Check This Row'
         MenuUncheck          = 'Uncheck This Row'
         MenuCheckOnly        = 'Only Check This Row'
-        MenuResume           = 'Resume in Terminal'
-        MenuSyncCurrent      = 'Sync This Row to Target'
-        MenuSyncChecked      = 'Sync Checked Rows to Target'
+        MenuLaunchTerminal   = 'Launch Terminal'
+        MenuLaunchWithChat   = 'Launch Terminal (+Chat)'
+        MenuSyncCurrent      = 'Sync to Target [This]'
+        MenuSyncChecked      = 'Sync to Target [Checked]'
+        MenuSyncAll          = 'Sync to Target [All]'
         StatusReady          = 'Ready'
     }
 }
@@ -1001,9 +1005,9 @@ function Layout-ToolbarGroups {
     Move-Control $ccProviderLabel 14 24
     Move-Control $script:CodexProviderCombo ($ccProviderLabel.Right + 6) 24 170 24
     Move-Control $openCodexButton ($script:CodexProviderCombo.Right + 12) 22
-    Move-Control $script:LoadCheckedRecordBox ($openCodexButton.Right + 12) 25
-    Move-Control $script:UsePowerShellLaunchBox ($script:LoadCheckedRecordBox.Right + 12) 25
-    Move-Control $script:TurnEndedNotifyBox ($script:UsePowerShellLaunchBox.Right + 12) 25
+    Move-Control $script:UsePowerShellLaunchBox ($openCodexButton.Right + 12) 25
+    Move-Control $script:LoadCheckedRecordBox ($script:UsePowerShellLaunchBox.Right + 12) 25
+    Move-Control $script:TurnEndedNotifyBox ($script:LoadCheckedRecordBox.Right + 12) 25
     Move-Control $testNotifyButton ($script:TurnEndedNotifyBox.Right + 12) 22
     Resize-GroupToFitControls -Group $launchGroup -MinWidth 880 -MinHeight 58
 
@@ -1105,9 +1109,11 @@ function Apply-UiLanguage {
     Set-ControlText $gridCheckItem 'MenuCheck'
     Set-ControlText $gridUncheckItem 'MenuUncheck'
     Set-ControlText $gridCheckOnlyItem 'MenuCheckOnly'
-    Set-ControlText $gridLaunchItem 'MenuResume'
+    Set-ControlText $gridLaunchTerminalItem 'MenuLaunchTerminal'
+    Set-ControlText $gridLaunchWithChatItem 'MenuLaunchWithChat'
     Set-ControlText $gridCloneCurrentItem 'MenuSyncCurrent'
     Set-ControlText $gridCloneCheckedItem 'MenuSyncChecked'
+    Set-ControlText $gridSyncAllItem 'MenuSyncAll'
 
     if ($script:StatusLabel -and ([string]::IsNullOrWhiteSpace($script:StatusLabel.Text) -or $script:StatusLabel.Text -in @('就绪', 'Ready'))) {
         $script:StatusLabel.Text = Get-UiText 'StatusReady'
@@ -1313,8 +1319,8 @@ $(Get-CcSwitchHomeHelpText)
 
 【从终端启动】
 - 不勾选记录：在当前目录创建新对话。
-- 勾选【按勾选加载记录】且只勾选一条记录：自动执行等价于 codex resume <线程 ID> 的恢复。
-- 取消【按勾选加载记录】：忽略列表最左侧勾选，在当前目录创建新对话。
+- 勾选【按勾选加载聊天】且只勾选一条记录：自动执行等价于 codex resume <线程 ID> 的恢复。
+- 取消【按勾选加载聊天】：忽略列表最左侧勾选，在当前目录创建新对话。
 - 勾选多条记录：会提示只保留一条。
 - 勾选【PowerShell启动】时优先用 PowerShell，否则优先用 CMD；找不到所选终端时会自动退回另一种。
 
@@ -1356,7 +1362,7 @@ function Set-CodexHomeFromSelection {
             Start-TurnCompleteMonitor
         }
         catch {
-            Append-Log "启动桌面版每次完成弹窗监控失败：$($_.Exception.Message)"
+            Append-Log "启动桌面版弹窗提醒监控失败：$($_.Exception.Message)"
         }
     }
 }
@@ -1744,7 +1750,7 @@ function New-AppConfigObject {
             defaultTargetProvider     = '同步目标 model_provider 桶。'
             defaultCcSwitchNode       = '从终端启动时使用的 cc-switch Codex 节点名字或 id。可参考 knownCcSwitchNodes。'
             usePowerShellTerminal     = 'true 表示从终端启动时优先用 PowerShell；false 表示优先用 CMD。'
-            loadCheckedRecordOnLaunch = 'true 表示从终端启动时，如果列表最左侧只勾选了一条记录，就自动恢复该对话；false 表示忽略勾选并在目录下新建对话。'
+            loadCheckedRecordOnLaunch = 'true 表示从终端启动时，如果【按勾选加载聊天】已开启且列表最左侧只勾选了一条记录，就自动恢复该对话；false 表示忽略勾选并在目录下新建对话。'
             uiLanguage                = '界面语言。zh-CN 表示中文，en-US 表示英文。'
             knownCodexHistoryProviders = '软件自动检测到的历史记录账号列表，只作参考。'
             knownCcSwitchNodes        = '软件自动检测到的 cc-switch Codex 节点列表，只作参考。'
@@ -2864,7 +2870,7 @@ function Apply-TurnEndedNotifyToCurrentConfig {
     if (-not [string]::IsNullOrWhiteSpace($script:LastCodexConfigFix)) {
         Append-Log $script:LastCodexConfigFix
     }
-    Append-Log "已写入每次完成弹窗 CLI notify 配置：$configPath"
+    Append-Log "已写入弹窗提醒 CLI notify 配置：$configPath"
 }
 
 function Show-TestTurnEndedNotify {
@@ -2975,7 +2981,7 @@ function Start-TurnCompleteMonitor {
         ) -WindowStyle Hidden | Out-Null
     }
 
-    Append-Log '已启动桌面版每次完成弹窗监控。'
+    Append-Log '已启动桌面版弹窗提醒监控。'
 }
 
 function Normalize-CodexConfig {
@@ -3290,13 +3296,13 @@ function Copy-CurrentCellToClipboard {
 function Open-CurrentWorkspaceDirectory {
     $cwd = Convert-CodexPath ([string](Get-CurrentGridValue 'Cwd'))
     if ([string]::IsNullOrWhiteSpace($cwd)) {
-        throw '当前记录没有工作目录。'
+        throw '当前记录没有项目目录。'
     }
     if (-not (Test-Path -LiteralPath $cwd -PathType Container)) {
-        throw "工作目录不存在：$cwd"
+        throw "项目目录不存在：$cwd"
     }
     Start-Process -FilePath explorer.exe -ArgumentList $cwd
-    Append-Log "已打开工作目录：$cwd"
+    Append-Log "已打开项目目录：$cwd"
 }
 
 function Invoke-CloneCheckedRowsToTarget {
@@ -3328,12 +3334,48 @@ function Invoke-CloneCheckedRowsToTarget {
     Refresh-Threads
 }
 
-function Invoke-LaunchCurrentGridRow {
-    Set-OnlyCurrentRowChecked
-    if ($script:LoadCheckedRecordBox) {
-        $script:LoadCheckedRecordBox.Checked = $true
+function Invoke-SyncAllRowsToTarget {
+    $source = Resolve-ProviderValue ([string]$script:SourceCombo.SelectedItem)
+    $target = Resolve-ProviderValue ([string]$script:TargetCombo.SelectedItem)
+    if ([string]::IsNullOrWhiteSpace($source) -or [string]::IsNullOrWhiteSpace($target)) {
+        [System.Windows.Forms.MessageBox]::Show('请先选择 Codex源账号和 Codex目标账号。', '账号不完整', 'OK', 'Information') | Out-Null
+        return
     }
-    Invoke-LaunchForProvider -Combo $script:CodexProviderCombo
+    Invoke-SyncCli -CommandArgs (@('sync', '-From', $source, '-To', $target) + (Get-SyncTargetProfileArgs $target))
+}
+
+function Invoke-LaunchCurrentGridRow {
+    param([switch]$WithChat)
+
+    $oldSuppress = $script:SuppressThreadRefresh
+    $oldLoadChecked = if ($script:LoadCheckedRecordBox) { [bool]$script:LoadCheckedRecordBox.Checked } else { $true }
+    try {
+        $script:SuppressThreadRefresh = $true
+        if ($WithChat) {
+            Set-OnlyCurrentRowChecked
+            if ($script:LoadCheckedRecordBox) { $script:LoadCheckedRecordBox.Checked = $true }
+        }
+        else {
+            if ($script:LoadCheckedRecordBox) { $script:LoadCheckedRecordBox.Checked = $false }
+        }
+    }
+    finally {
+        $script:SuppressThreadRefresh = $oldSuppress
+    }
+
+    try {
+        Invoke-LaunchForProvider -Combo $script:CodexProviderCombo
+    }
+    finally {
+        $oldSuppressRestore = $script:SuppressThreadRefresh
+        try {
+            $script:SuppressThreadRefresh = $true
+            if ($script:LoadCheckedRecordBox) { $script:LoadCheckedRecordBox.Checked = $oldLoadChecked }
+        }
+        finally {
+            $script:SuppressThreadRefresh = $oldSuppressRestore
+        }
+    }
 }
 
 function Set-AllRowsChecked {
@@ -3544,13 +3586,13 @@ function Refresh-Threads {
             $titleColumn.AutoSizeMode = 'Fill'
         }
         $headers = @{
-            Selected = '选择'
-            Updated  = '更新时间'
-            Provider = '账号'
-            Archived = '已归档'
-            Id       = '线程 ID'
-            Cwd      = '工作目录'
-            Title    = '标题'
+            Selected = Get-UiText 'GridSelect'
+            Updated  = Get-UiText 'GridUpdated'
+            Provider = Get-UiText 'GridProvider'
+            Archived = Get-UiText 'GridArchived'
+            Id       = Get-UiText 'GridThreadId'
+            Cwd      = Get-UiText 'GridCwd'
+            Title    = Get-UiText 'GridTitle'
         }
         foreach ($key in $headers.Keys) {
             $column = Get-GridColumnByProperty $key
@@ -3707,7 +3749,7 @@ $launchGroup.Controls.Add($script:CodexProviderCombo)
 $openCodexButton = New-Button '从终端启动' 292 22 110 'Primary'
 $launchGroup.Controls.Add($openCodexButton)
 $script:LoadCheckedRecordBox = New-Object System.Windows.Forms.CheckBox
-$script:LoadCheckedRecordBox.Text = '按勾选加载记录'
+$script:LoadCheckedRecordBox.Text = '按勾选加载聊天'
 $script:LoadCheckedRecordBox.Location = New-Object System.Drawing.Point(414, 25)
 $script:LoadCheckedRecordBox.Size = New-Object System.Drawing.Size(128, 22)
 $script:LoadCheckedRecordBox.Checked = $true
@@ -3719,7 +3761,7 @@ $script:UsePowerShellLaunchBox.Size = New-Object System.Drawing.Size(118, 22)
 $script:UsePowerShellLaunchBox.Checked = $false
 $launchGroup.Controls.Add($script:UsePowerShellLaunchBox)
 $script:TurnEndedNotifyBox = New-Object System.Windows.Forms.CheckBox
-$script:TurnEndedNotifyBox.Text = '完成弹窗'
+$script:TurnEndedNotifyBox.Text = '弹窗提醒'
 $script:TurnEndedNotifyBox.Location = New-Object System.Drawing.Point(676, 25)
 $script:TurnEndedNotifyBox.Size = New-Object System.Drawing.Size(82, 22)
 $script:TurnEndedNotifyBox.Checked = $true
@@ -3760,8 +3802,8 @@ $gridColumns = @(
     @{ Name = 'Provider'; Header = '账号'; Width = 80; Type = 'Text' },
     @{ Name = 'Archived'; Header = '已归档'; Width = 80; Type = 'Check' },
     @{ Name = 'Id'; Header = '线程 ID'; Width = 260; Type = 'Text' },
-    @{ Name = 'Cwd'; Header = '工作目录'; Width = 260; Type = 'Text' },
-    @{ Name = 'Title'; Header = '标题'; Width = 280; Type = 'Text'; Fill = $true },
+    @{ Name = 'Cwd'; Header = '项目目录'; Width = 260; Type = 'Text' },
+    @{ Name = 'Title'; Header = '聊天内容'; Width = 280; Type = 'Text'; Fill = $true },
     @{ Name = 'RolloutPath'; Header = '记录文件'; Width = 80; Type = 'Text'; Hidden = $true }
 )
 foreach ($definition in $gridColumns) {
@@ -3788,6 +3830,54 @@ $script:Form.Controls.Add($script:Grid)
 
 $script:GridContextRowIndex = -1
 $script:GridContextMenu = New-Object System.Windows.Forms.ContextMenuStrip
+$gridLaunchTerminalItem = $script:GridContextMenu.Items.Add('启动终端')
+$gridLaunchTerminalItem.Add_Click({
+        try {
+            Invoke-LaunchCurrentGridRow
+        }
+        catch {
+            Show-GuiError $_
+        }
+    })
+$gridLaunchWithChatItem = $script:GridContextMenu.Items.Add('启动终端（+聊天）')
+$gridLaunchWithChatItem.Add_Click({
+        try {
+            Invoke-LaunchCurrentGridRow -WithChat
+        }
+        catch {
+            Show-GuiError $_
+        }
+    })
+[void]$script:GridContextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+$gridCloneCurrentItem = $script:GridContextMenu.Items.Add('同步至目标账号 [此条]')
+$gridCloneCurrentItem.Add_Click({
+        try {
+            Set-OnlyCurrentRowChecked
+            Invoke-CloneCheckedRowsToTarget
+        }
+        catch {
+            Show-GuiError $_
+        }
+    })
+$gridCloneCheckedItem = $script:GridContextMenu.Items.Add('同步至目标账号 [勾选]')
+$gridCloneCheckedItem.Add_Click({
+        try {
+            Invoke-CloneCheckedRowsToTarget
+        }
+        catch {
+            Show-GuiError $_
+        }
+    })
+$gridSyncAllItem = $script:GridContextMenu.Items.Add('同步至目标账号 [所有]')
+$gridSyncAllItem.Add_Click({
+        try {
+            Invoke-SyncAllRowsToTarget
+        }
+        catch {
+            Show-GuiError $_
+        }
+    })
+[void]$script:GridContextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 $gridOpenRecordDirItem = $script:GridContextMenu.Items.Add('打开聊天目录')
 $gridOpenRecordDirItem.Add_Click({
         try {
@@ -3799,7 +3889,7 @@ $gridOpenRecordDirItem.Add_Click({
             Show-GuiError $_
         }
     })
-$gridOpenWorkspaceItem = $script:GridContextMenu.Items.Add('打开工作目录')
+$gridOpenWorkspaceItem = $script:GridContextMenu.Items.Add('打开项目目录')
 $gridOpenWorkspaceItem.Add_Click({
         try {
             Open-CurrentWorkspaceDirectory
@@ -3812,11 +3902,11 @@ $gridOpenWorkspaceItem.Add_Click({
 $gridCopyCellItem = $script:GridContextMenu.Items.Add('复制当前单元格')
 $gridCopyCellItem.Add_Click({ Copy-CurrentCellToClipboard })
 $gridCopyIdItem = $script:GridContextMenu.Items.Add('复制线程 ID')
-$gridCopyIdItem.Add_Click({ Copy-GridValueToClipboard -ColumnName 'Id' -Label '线程 ID' })
-$gridCopyCwdItem = $script:GridContextMenu.Items.Add('复制工作目录')
-$gridCopyCwdItem.Add_Click({ Copy-GridValueToClipboard -ColumnName 'Cwd' -Label '工作目录' })
-$gridCopyTitleItem = $script:GridContextMenu.Items.Add('复制标题')
-$gridCopyTitleItem.Add_Click({ Copy-GridValueToClipboard -ColumnName 'Title' -Label '标题' })
+$gridCopyIdItem.Add_Click({ Copy-GridValueToClipboard -ColumnName 'Id' -Label (Get-UiText 'GridThreadId') })
+$gridCopyCwdItem = $script:GridContextMenu.Items.Add('复制项目目录')
+$gridCopyCwdItem.Add_Click({ Copy-GridValueToClipboard -ColumnName 'Cwd' -Label (Get-UiText 'GridCwd') })
+$gridCopyTitleItem = $script:GridContextMenu.Items.Add('复制聊天内容')
+$gridCopyTitleItem.Add_Click({ Copy-GridValueToClipboard -ColumnName 'Title' -Label (Get-UiText 'GridTitle') })
 [void]$script:GridContextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 $gridCheckItem = $script:GridContextMenu.Items.Add('勾选此记录')
 $gridCheckItem.Add_Click({ Set-CurrentRowChecked $true })
@@ -3824,35 +3914,6 @@ $gridUncheckItem = $script:GridContextMenu.Items.Add('取消勾选此记录')
 $gridUncheckItem.Add_Click({ Set-CurrentRowChecked $false })
 $gridCheckOnlyItem = $script:GridContextMenu.Items.Add('只勾选此记录')
 $gridCheckOnlyItem.Add_Click({ Set-OnlyCurrentRowChecked })
-[void]$script:GridContextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
-$gridLaunchItem = $script:GridContextMenu.Items.Add('从终端恢复此记录')
-$gridLaunchItem.Add_Click({
-        try {
-            Invoke-LaunchCurrentGridRow
-        }
-        catch {
-            Show-GuiError $_
-        }
-    })
-$gridCloneCurrentItem = $script:GridContextMenu.Items.Add('同步此记录到目标账号')
-$gridCloneCurrentItem.Add_Click({
-        try {
-            Set-OnlyCurrentRowChecked
-            Invoke-CloneCheckedRowsToTarget
-        }
-        catch {
-            Show-GuiError $_
-        }
-    })
-$gridCloneCheckedItem = $script:GridContextMenu.Items.Add('同步当前勾选到目标账号')
-$gridCloneCheckedItem.Add_Click({
-        try {
-            Invoke-CloneCheckedRowsToTarget
-        }
-        catch {
-            Show-GuiError $_
-        }
-    })
 $script:Grid.ContextMenuStrip = $script:GridContextMenu
 $script:GridContextMenu.Add_Opening({
         param($Sender, $EventArgs)
@@ -3976,13 +4037,12 @@ $cloneButton.Add_Click({
     })
 
 $syncButton.Add_Click({
-        $source = Resolve-ProviderValue ([string]$script:SourceCombo.SelectedItem)
-        $target = Resolve-ProviderValue ([string]$script:TargetCombo.SelectedItem)
-        if ([string]::IsNullOrWhiteSpace($source) -or [string]::IsNullOrWhiteSpace($target)) {
-            [System.Windows.Forms.MessageBox]::Show('请先选择 Codex源账号和 Codex目标账号。', '账号不完整', 'OK', 'Information') | Out-Null
-            return
+        try {
+            Invoke-SyncAllRowsToTarget
         }
-        Invoke-SyncCli -CommandArgs (@('sync', '-From', $source, '-To', $target) + (Get-SyncTargetProfileArgs $target))
+        catch {
+            Show-GuiError $_
+        }
     })
 
 $mirrorButton.Add_Click({
@@ -4186,7 +4246,7 @@ if ($script:TurnEndedNotifyBox.Checked -and (Test-CodexHomeReady)) {
         Start-TurnCompleteMonitor
     }
     catch {
-        Append-Log "自动启用每次完成弹窗失败：$($_.Exception.Message)"
+        Append-Log "自动启用弹窗提醒失败：$($_.Exception.Message)"
     }
 }
 

@@ -94,8 +94,8 @@ The GUI opens with these main controls:
 | `同步全部` | Copy all listed source rows to the target provider |
 | `双向同步` | Sync both directions between the selected providers |
 | `cc-switch供应商` | cc-switch Codex provider used by `从终端启动` |
-| `从终端启动` | Open an elevated terminal; the first terminal line shows `[管理员模式]` or `[非管理员]`; start a new chat, or resume the one checked thread when `按勾选加载记录` is enabled |
-| `按勾选加载记录` | When enabled, one checked row launches with `codex resume <thread-id>`; when disabled, checked rows are ignored and a new chat starts in the selected directory |
+| `从终端启动` | Open an elevated terminal; the first terminal line shows `[管理员模式]` or `[非管理员]`; start a new chat, or resume the one checked thread when `按勾选加载聊天` is enabled |
+| `按勾选加载聊天` | When enabled, one checked row launches with `codex resume <thread-id>`; when disabled, checked rows are ignored and a new chat starts in the selected directory |
 | `PowerShell启动` | Prefer PowerShell when checked; prefer CMD when unchecked; fall back automatically if the preferred terminal is unavailable |
 | `语言` | Switch the GUI between Chinese and English |
 | `软件设置` | Open root `codex-history-sync-config.json`; the GUI creates it if missing and reloads it after saves |
@@ -105,7 +105,7 @@ The GUI opens with these main controls:
 | `打开聊天目录` | Open the selected chat's rollout folder; if no chat is selected, open `.codex\sessions` |
 | `codex目录` | Open the current Codex history root directory |
 | `导入cc配置` | Manually load the cc-switch configuration directory containing `cc-switch.db`, so the GUI can read Codex launch providers such as Any Router and RightCode |
-| 表格右键菜单 | Open chat/work directories, copy row values, check one row, resume one row, or sync selected rows from the table |
+| 表格右键菜单 | Launch a terminal, launch with the current chat, sync this/checked/all rows to the target account, open directories, or copy row values |
 
 ## CLI Usage
 
@@ -199,7 +199,7 @@ If automatic discovery fails, use `导入cc配置` and select the folder contain
 
 ## Completion Popup
 
-The GUI can enable a local completion popup for Codex responses. When `完成弹窗` is enabled, the tool:
+The GUI can enable a local completion popup for Codex responses. When `弹窗提醒` is enabled, the tool:
 
 - writes the local Codex `notify` setting to use `tools\codex-turn-ended-notify.vbs`;
 - starts `tools\codex-turn-complete-monitor.vbs`;
