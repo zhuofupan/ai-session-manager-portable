@@ -8,9 +8,10 @@
     "defaultTargetProvider": "同步目标 model_provider 桶。",
     "defaultCcSwitchNode": "从终端启动时使用的 cc-switch Codex 节点名字或 id。可参考自动生成配置中的 knownCcSwitchNodes。",
     "usePowerShellTerminal": "true 表示从终端启动时优先用 PowerShell；false 表示优先用 CMD。",
+    "loadCheckedRecordOnLaunch": "true 表示从终端启动时，如果列表最左侧只勾选了一条记录，就自动恢复该对话；false 表示忽略勾选并在目录下新建对话。",
     "security": "不要在这里写 API key、token、auth.json、config.toml 或 state_5.sqlite 内容。"
   },
-  "version": "2026.06.13.7",
+  "version": "2026.06.13.8",
   "codexHome": "",
   "ccSwitchHome": "",
   "codexExe": "",
@@ -23,6 +24,7 @@
   "disableAppsOnFast": true,
   "turnCompletePopup": true,
   "usePowerShellTerminal": false,
+  "loadCheckedRecordOnLaunch": true,
   "knownCodexHistoryProviders": [],
   "knownCcSwitchNodes": []
 }

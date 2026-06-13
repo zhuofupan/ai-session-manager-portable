@@ -94,8 +94,9 @@ The GUI opens with these main controls:
 | `同步全部` | Copy all listed source rows to the target provider |
 | `双向同步` | Sync both directions between the selected providers |
 | `cc switch节点` | cc-switch Codex node used by `从终端启动` |
-| `从终端启动` | Open an elevated terminal; the first terminal line shows `[管理员模式]` or `[非管理员]`; start a new chat when no row is checked; resume the one checked thread; reject multiple checked rows |
-| `用 PowerShell` | Prefer PowerShell when checked; prefer CMD when unchecked; fall back automatically if the preferred terminal is unavailable |
+| `从终端启动` | Open an elevated terminal; the first terminal line shows `[管理员模式]` or `[非管理员]`; start a new chat, or resume the one checked thread when `勾选加载记录` is enabled |
+| `勾选加载记录` | When enabled, one checked row launches with `codex resume <thread-id>`; when disabled, checked rows are ignored and a new chat starts in the selected directory |
+| `PowerShell启动` | Prefer PowerShell when checked; prefer CMD when unchecked; fall back automatically if the preferred terminal is unavailable |
 | `打开软件配置` | Open root `codex-history-sync-config.json`; the GUI creates it if missing and reloads it after saves |
 | `帮助` | Show path/account/start/update guidance and copy Everything search terms |
 | `检查更新` | Check GitHub main for a newer version and apply a one-click hot update |

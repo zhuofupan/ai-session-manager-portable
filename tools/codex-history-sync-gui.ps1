@@ -31,7 +31,7 @@ public static class CodexHistorySyncWindow {
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$script:AppVersion = '2026.06.13.7'
+$script:AppVersion = '2026.06.13.8'
 $script:AppAuthor = 'zhuofupan'
 $script:GitHubRepo = 'zhuofupan/codex-history-sync-portable'
 $script:GitHubUrl = "https://github.com/$script:GitHubRepo"
@@ -885,9 +885,10 @@ $(Get-CcSwitchHomeHelpText)
 
 【从终端启动】
 - 不勾选记录：在当前目录创建新对话。
-- 只勾选一条记录：自动执行等价于 codex resume <线程 ID> 的恢复。
+- 勾选【勾选加载记录】且只勾选一条记录：自动执行等价于 codex resume <线程 ID> 的恢复。
+- 取消【勾选加载记录】：忽略列表最左侧勾选，在当前目录创建新对话。
 - 勾选多条记录：会提示只保留一条。
-- 勾选【用 PowerShell】时优先用 PowerShell，否则优先用 CMD；找不到所选终端时会自动退回另一种。
+- 勾选【PowerShell启动】时优先用 PowerShell，否则优先用 CMD；找不到所选终端时会自动退回另一种。
 
 【更新】
 - 点击【检查更新】会从 GitHub main 分支检查版本；发现新版后可以一键下载并覆盖当前程序文件。
@@ -1124,6 +1125,7 @@ function Get-CurrentAppState {
         disableAppsOnFast      = [bool]$script:DisableCodexAppsOnFast
         turnCompletePopup      = if ($script:TurnEndedNotifyBox) { [bool]$script:TurnEndedNotifyBox.Checked } else { $true }
         usePowerShellTerminal  = if ($script:UsePowerShellLaunchBox) { [bool]$script:UsePowerShellLaunchBox.Checked } else { $false }
+        loadCheckedRecordOnLaunch = if ($script:LoadCheckedRecordBox) { [bool]$script:LoadCheckedRecordBox.Checked } else { $true }
     }
 }
 
@@ -1184,6 +1186,9 @@ function Import-AppConfig {
         }
         if ($script:UsePowerShellLaunchBox) {
             $script:UsePowerShellLaunchBox.Checked = Get-ConfigBoolValue -Config $config -Names @('usePowerShellTerminal', 'preferPowerShell') -Default ([bool]$script:UsePowerShellLaunchBox.Checked)
+        }
+        if ($script:LoadCheckedRecordBox) {
+            $script:LoadCheckedRecordBox.Checked = Get-ConfigBoolValue -Config $config -Names @('loadCheckedRecordOnLaunch', 'resumeCheckedRecordOnLaunch', 'loadSelectedRecordOnLaunch') -Default ([bool]$script:LoadCheckedRecordBox.Checked)
         }
         if ($script:LimitBox) {
             $limit = Get-ConfigIntValue -Config $config -Names @('limit', 'displayLimit') -Default ([int]$script:LimitBox.Value)
@@ -1306,6 +1311,7 @@ function New-AppConfigObject {
             defaultTargetProvider     = '同步目标 model_provider 桶。'
             defaultCcSwitchNode       = '从终端启动时使用的 cc-switch Codex 节点名字或 id。可参考 knownCcSwitchNodes。'
             usePowerShellTerminal     = 'true 表示从终端启动时优先用 PowerShell；false 表示优先用 CMD。'
+            loadCheckedRecordOnLaunch = 'true 表示从终端启动时，如果列表最左侧只勾选了一条记录，就自动恢复该对话；false 表示忽略勾选并在目录下新建对话。'
             knownCodexHistoryProviders = '软件自动检测到的历史记录账号列表，只作参考。'
             knownCcSwitchNodes        = '软件自动检测到的 cc-switch Codex 节点列表，只作参考。'
             security                  = '不要在这里写 API key、token、auth.json、config.toml 或 state_5.sqlite 内容。'
@@ -1323,6 +1329,7 @@ function New-AppConfigObject {
         disableAppsOnFast          = [bool]$state.disableAppsOnFast
         turnCompletePopup          = [bool]$state.turnCompletePopup
         usePowerShellTerminal      = [bool]$state.usePowerShellTerminal
+        loadCheckedRecordOnLaunch  = [bool]$state.loadCheckedRecordOnLaunch
         knownCodexHistoryProviders = @(Get-DetectedCodexHistoryProvidersForConfig)
         knownCcSwitchNodes         = @(Get-DetectedCcSwitchNodesForConfig)
     }
@@ -1365,7 +1372,8 @@ function Sync-AppConfigFileWithDetectedInfo {
                     'includeArchived',
                     'disableAppsOnFast',
                     'turnCompletePopup',
-                    'usePowerShellTerminal'
+                    'usePowerShellTerminal',
+                    'loadCheckedRecordOnLaunch'
                 )) {
                 $value = Get-ConfigPropertyValue -Config $existing -Names @($name)
                 if ($null -ne $value -and -not (Test-TemplatePlaceholderValue ([string]$value))) {
@@ -1885,11 +1893,11 @@ function Start-CodexInDirectory {
 
     $commandParts = @((ConvertTo-CmdArgument $codexExe)) + @($codexArgs | ForEach-Object { ConvertTo-CmdArgument $_ })
     $codexCommand = ($commandParts -join ' ').Trim()
-    $adminPrelude = 'fltmc >nul 2>&1 && (title 管理员 CMD - Codex && echo [管理员模式] 当前终端已提权) || (title 非管理员 CMD - Codex && echo [非管理员] 当前终端未提权)'
-    $command = $adminPrelude + ' && cd /d ' + (ConvertTo-CmdArgument $resolvedDirectory) + ' && ' + $codexCommand
+    $adminPrelude = '(fltmc >nul 2>&1 && (title 管理员 CMD - Codex && echo [管理员模式] 当前终端已提权) || (title 非管理员 CMD - Codex && echo [非管理员] 当前终端未提权))'
+    $command = $adminPrelude + ' & cd /d ' + (ConvertTo-CmdArgument $resolvedDirectory) + ' && ' + $codexCommand
     Start-Process -FilePath $shell.Path `
         -WorkingDirectory $resolvedDirectory `
-        -ArgumentList @('/k', $command) `
+        -ArgumentList @('/d', '/k', $command) `
         -Verb RunAs
     return $shell.Name
 }
@@ -2701,7 +2709,8 @@ function Invoke-LaunchForProvider {
     if ([string]::IsNullOrWhiteSpace($providerId)) {
         throw '请先选择 cc switch节点。若下拉菜单为空，请点击【打开软件配置】填写 ccSwitchHome 后保存，或点击【增加节点目录】选择包含 cc-switch.db 的目录。'
     }
-    $resumeSelection = Get-LaunchResumeSelection
+    $loadCheckedRecord = $script:LoadCheckedRecordBox -and [bool]$script:LoadCheckedRecordBox.Checked
+    $resumeSelection = if ($loadCheckedRecord) { Get-LaunchResumeSelection } else { $null }
     $resumeId = $null
     if ($resumeSelection) {
         $resumeId = [string]$resumeSelection.Id
@@ -3051,6 +3060,16 @@ $headerSubTitle.Size = New-Object System.Drawing.Size(360, 20)
 $headerSubTitle.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
 $headerPanel.Controls.Add($headerSubTitle)
 
+$headerMeta = New-Object System.Windows.Forms.Label
+$headerMeta.Text = "v$script:AppVersion  |  作者 $script:AppAuthor"
+$headerMeta.Location = New-Object System.Drawing.Point(874, 20)
+$headerMeta.Size = New-Object System.Drawing.Size(400, 22)
+$headerMeta.Anchor = 'Top,Right'
+$headerMeta.TextAlign = 'MiddleRight'
+$headerMeta.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
+$headerMeta.ForeColor = [System.Drawing.Color]::FromArgb(71, 85, 105)
+$headerPanel.Controls.Add($headerMeta)
+
 $historyGroup = New-GroupBox '历史筛选' 12 70 500 86
 $script:Form.Controls.Add($historyGroup)
 $historyGroup.Controls.Add((New-Label '源账号' 14 24 50))
@@ -3116,32 +3135,38 @@ $pathGroup.Controls.Add($openCodexFolderButton)
 $pathGroup.Controls.Add($selectCcSwitchHomeButton)
 $pathGroup.Controls.Add($openConfigButton)
 
-$launchGroup = New-GroupBox '启动与提醒' 12 166 642 58
+$launchGroup = New-GroupBox '启动与提醒' 12 166 768 58
 $script:Form.Controls.Add($launchGroup)
 $launchGroup.Controls.Add((New-Label 'cc switch节点' 14 24 86))
 $script:CodexProviderCombo = New-Object System.Windows.Forms.ComboBox
 $script:CodexProviderCombo.DropDownStyle = 'DropDownList'
 $script:CodexProviderCombo.Location = New-Object System.Drawing.Point(104, 24)
-$script:CodexProviderCombo.Size = New-Object System.Drawing.Size(190, 24)
+$script:CodexProviderCombo.Size = New-Object System.Drawing.Size(180, 24)
 $launchGroup.Controls.Add($script:CodexProviderCombo)
-$openCodexButton = New-Button '从终端启动' 304 22 104 'Primary'
+$openCodexButton = New-Button '从终端启动' 294 22 104 'Primary'
 $launchGroup.Controls.Add($openCodexButton)
+$script:LoadCheckedRecordBox = New-Object System.Windows.Forms.CheckBox
+$script:LoadCheckedRecordBox.Text = '勾选加载记录'
+$script:LoadCheckedRecordBox.Location = New-Object System.Drawing.Point(408, 25)
+$script:LoadCheckedRecordBox.Size = New-Object System.Drawing.Size(112, 22)
+$script:LoadCheckedRecordBox.Checked = $true
+$launchGroup.Controls.Add($script:LoadCheckedRecordBox)
 $script:UsePowerShellLaunchBox = New-Object System.Windows.Forms.CheckBox
-$script:UsePowerShellLaunchBox.Text = 'PowerShell'
-$script:UsePowerShellLaunchBox.Location = New-Object System.Drawing.Point(418, 25)
-$script:UsePowerShellLaunchBox.Size = New-Object System.Drawing.Size(92, 22)
+$script:UsePowerShellLaunchBox.Text = 'PowerShell启动'
+$script:UsePowerShellLaunchBox.Location = New-Object System.Drawing.Point(522, 25)
+$script:UsePowerShellLaunchBox.Size = New-Object System.Drawing.Size(106, 22)
 $script:UsePowerShellLaunchBox.Checked = $false
 $launchGroup.Controls.Add($script:UsePowerShellLaunchBox)
 $script:TurnEndedNotifyBox = New-Object System.Windows.Forms.CheckBox
 $script:TurnEndedNotifyBox.Text = '完成弹窗'
-$script:TurnEndedNotifyBox.Location = New-Object System.Drawing.Point(512, 25)
+$script:TurnEndedNotifyBox.Location = New-Object System.Drawing.Point(632, 25)
 $script:TurnEndedNotifyBox.Size = New-Object System.Drawing.Size(82, 22)
 $script:TurnEndedNotifyBox.Checked = $true
 $launchGroup.Controls.Add($script:TurnEndedNotifyBox)
-$testNotifyButton = New-Button '测试' 596 22 42
+$testNotifyButton = New-Button '测试' 718 22 42
 $launchGroup.Controls.Add($testNotifyButton)
 
-$supportGroup = New-GroupBox '帮助与更新' 666 166 226 58
+$supportGroup = New-GroupBox '帮助与更新' 792 166 226 58
 $script:Form.Controls.Add($supportGroup)
 $helpButton = New-Button '帮助' 14 22 86 'Soft'
 $updateButton = New-Button '检查更新' 110 22 96
@@ -3410,6 +3435,11 @@ $script:CwdCombo.Add_SelectedIndexChanged({
         }
     })
 $script:UsePowerShellLaunchBox.Add_CheckedChanged({
+        if (-not $script:SuppressThreadRefresh) {
+            Save-AppState
+        }
+    })
+$script:LoadCheckedRecordBox.Add_CheckedChanged({
         if (-not $script:SuppressThreadRefresh) {
             Save-AppState
         }
