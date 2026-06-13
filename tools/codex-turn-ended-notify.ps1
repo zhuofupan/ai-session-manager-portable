@@ -332,6 +332,10 @@ function Test-NotifyMessageNeedsRolloutContext {
 
     if ([string]::IsNullOrWhiteSpace($Value)) { return $true }
     $clean = ($Value -replace '\s+', ' ').Trim()
+    if ([string]::Equals($clean, 'Codex', [System.StringComparison]::OrdinalIgnoreCase) -or
+        $clean -match '^(?i:codex)\s+(?i:codex)$') {
+        return $true
+    }
     if ($clean -match '未知账号|未知目录|当前会话|当前任务已完成|Codex 已完成当前会话|turn-ended') {
         return $true
     }

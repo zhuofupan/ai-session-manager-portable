@@ -100,6 +100,8 @@ The GUI opens with these main controls:
 | `帮助` | Show path/account/start/update guidance and copy Everything search terms |
 | `检查更新` | Check GitHub main for a newer version and apply a one-click hot update |
 | `增加记录目录` | Manually load a `.codex` directory |
+| `打开聊天目录` | Open the selected chat's rollout folder; if no chat is selected, open `.codex\sessions` |
+| `打开.codex` | Open the current Codex history root directory |
 | `增加节点目录` | Manually load the cc-switch node directory containing `cc-switch.db` |
 
 ## CLI Usage

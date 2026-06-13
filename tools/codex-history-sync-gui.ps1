@@ -31,7 +31,7 @@ public static class CodexHistorySyncWindow {
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$script:AppVersion = '2026.06.13.6'
+$script:AppVersion = '2026.06.13.7'
 $script:AppAuthor = 'zhuofupan'
 $script:GitHubRepo = 'zhuofupan/codex-history-sync-portable'
 $script:GitHubUrl = "https://github.com/$script:GitHubRepo"
@@ -342,6 +342,12 @@ function Convert-CodexPath {
     return ($Path -replace '^\\\\\?\\', '').TrimEnd('\')
 }
 
+function Convert-CodexFilePath {
+    param([AllowNull()][string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return '' }
+    return ($Path -replace '^\\\\\?\\', '')
+}
+
 function Shorten-Text {
     param(
         [AllowNull()][string]$Text,
@@ -556,7 +562,7 @@ function Get-ThreadRows {
     $limitClause = if ([string]::IsNullOrWhiteSpace($wantedCwd)) { "LIMIT $Limit" } else { '' }
 
     $rows = Invoke-SqlJson @"
-SELECT id, model_provider, cwd, title, archived, updated_at_ms
+SELECT id, model_provider, cwd, title, archived, updated_at_ms, rollout_path
 FROM threads
 $where
 ORDER BY updated_at_ms DESC, id DESC
@@ -577,14 +583,16 @@ $limitClause;
         $archivedValue = [bool]$row.archived
         $idText = [string]$row.id
         $titleText = Shorten-Text ([string]$row.title) 140
+        $rolloutPath = Convert-CodexFilePath ([string]$row.rollout_path)
 
         $items += [pscustomobject]@{
-            Updated  = $updatedText
-            Provider = $providerText
-            Archived = $archivedValue
-            Id       = $idText
-            Cwd      = $cwd
-            Title    = $titleText
+            Updated     = $updatedText
+            Provider    = $providerText
+            Archived    = $archivedValue
+            Id          = $idText
+            Cwd         = $cwd
+            Title       = $titleText
+            RolloutPath = $rolloutPath
         }
 
         if ($items.Count -ge $Limit) { break }
@@ -641,17 +649,101 @@ function New-Label {
     $label.Location = New-Object System.Drawing.Point($X, $Y)
     $label.Size = New-Object System.Drawing.Size($W, 24)
     $label.TextAlign = 'MiddleLeft'
+    $label.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
+    $label.ForeColor = [System.Drawing.Color]::FromArgb(43, 51, 63)
     return $label
 }
 
 function New-Button {
-    param([string]$Text, [int]$X, [int]$Y, [int]$W = 110)
+    param(
+        [string]$Text,
+        [int]$X,
+        [int]$Y,
+        [int]$W = 110,
+        [ValidateSet('Default', 'Primary', 'Soft')]
+        [string]$Kind = 'Default'
+    )
     $button = New-Object System.Windows.Forms.Button
     $button.Text = $Text
     $button.Location = New-Object System.Drawing.Point($X, $Y)
     $button.Size = New-Object System.Drawing.Size($W, 28)
-    $button.UseVisualStyleBackColor = $true
+    $button.FlatStyle = 'Flat'
+    $button.FlatAppearance.BorderSize = 1
+    $button.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
+    if ($Kind -eq 'Primary') {
+        $button.BackColor = [System.Drawing.Color]::FromArgb(31, 111, 235)
+        $button.ForeColor = [System.Drawing.Color]::White
+        $button.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(31, 111, 235)
+    }
+    elseif ($Kind -eq 'Soft') {
+        $button.BackColor = [System.Drawing.Color]::FromArgb(239, 246, 255)
+        $button.ForeColor = [System.Drawing.Color]::FromArgb(30, 64, 175)
+        $button.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(191, 219, 254)
+    }
+    else {
+        $button.BackColor = [System.Drawing.Color]::White
+        $button.ForeColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
+        $button.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(203, 213, 225)
+    }
     return $button
+}
+
+function New-GroupBox {
+    param([string]$Text, [int]$X, [int]$Y, [int]$W, [int]$H)
+
+    $group = New-Object System.Windows.Forms.GroupBox
+    $group.Text = $Text
+    $group.Location = New-Object System.Drawing.Point($X, $Y)
+    $group.Size = New-Object System.Drawing.Size($W, $H)
+    $group.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
+    $group.ForeColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
+    $group.BackColor = [System.Drawing.Color]::FromArgb(248, 250, 252)
+    return $group
+}
+
+function New-HeaderImage {
+    $bitmap = New-Object System.Drawing.Bitmap 220, 56
+    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+    $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $graphics.Clear([System.Drawing.Color]::Transparent)
+
+    $blue = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(31, 111, 235))
+    $teal = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(20, 184, 166))
+    $ink = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(51, 65, 85))
+    $line = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(148, 163, 184)), 2
+    $whitePen = New-Object System.Drawing.Pen ([System.Drawing.Color]::White), 2
+
+    $cardPath = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $cardPath.AddArc(8, 10, 14, 14, 180, 90)
+    $cardPath.AddArc(46, 10, 14, 14, 270, 90)
+    $cardPath.AddArc(46, 32, 14, 14, 0, 90)
+    $cardPath.AddArc(8, 32, 14, 14, 90, 90)
+    $cardPath.CloseFigure()
+    $graphics.FillPath($blue, $cardPath)
+    $graphics.DrawLine($whitePen, 20, 23, 48, 23)
+    $graphics.DrawLine($whitePen, 20, 33, 42, 33)
+    $graphics.FillEllipse($teal, 52, 8, 13, 13)
+
+    $bubblePath = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $bubblePath.AddArc(82, 9, 16, 16, 180, 90)
+    $bubblePath.AddArc(178, 9, 16, 16, 270, 90)
+    $bubblePath.AddArc(178, 31, 16, 16, 0, 90)
+    $bubblePath.AddArc(82, 31, 16, 16, 90, 90)
+    $bubblePath.CloseFigure()
+    $graphics.DrawPath($line, $bubblePath)
+    $graphics.FillRectangle($ink, 96, 21, 64, 4)
+    $graphics.FillRectangle($teal, 96, 31, 82, 4)
+    $graphics.DrawLine($line, 62, 28, 82, 28)
+
+    $bubblePath.Dispose()
+    $cardPath.Dispose()
+    $whitePen.Dispose()
+    $line.Dispose()
+    $ink.Dispose()
+    $teal.Dispose()
+    $blue.Dispose()
+    $graphics.Dispose()
+    return $bitmap
 }
 
 function Select-FolderPath {
@@ -1545,6 +1637,37 @@ function Get-CurrentGridValue {
         }
     }
     return $null
+}
+
+function Get-ThreadRolloutPathById {
+    param([AllowNull()][string]$ThreadId)
+
+    if ([string]::IsNullOrWhiteSpace($ThreadId)) { return '' }
+    $rows = @(Invoke-SqlJson "SELECT rollout_path FROM threads WHERE id = $(Quote-Sql $ThreadId) LIMIT 1;")
+    if ($rows.Count -eq 0) { return '' }
+    return Convert-CodexFilePath ([string]$rows[0].rollout_path)
+}
+
+function Resolve-SelectedRecordDirectory {
+    Assert-CodexHomeReady
+
+    $rolloutPath = Convert-CodexFilePath ([string](Get-CurrentGridValue 'RolloutPath'))
+    if ([string]::IsNullOrWhiteSpace($rolloutPath)) {
+        $threadId = [string](Get-CurrentGridValue 'Id')
+        $rolloutPath = Get-ThreadRolloutPathById $threadId
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($rolloutPath) -and
+        (Test-Path -LiteralPath $rolloutPath -PathType Leaf)) {
+        return (Resolve-Path -LiteralPath (Split-Path -Parent $rolloutPath)).Path
+    }
+
+    $sessionsDir = Join-Path $CodexHome 'sessions'
+    if (Test-Path -LiteralPath $sessionsDir -PathType Container) {
+        return (Resolve-Path -LiteralPath $sessionsDir).Path
+    }
+
+    return $CodexHome
 }
 
 function Resolve-LaunchDirectory {
@@ -2846,7 +2969,8 @@ function Refresh-Threads {
                 [bool]$row.Archived,
                 [string]$row.Id,
                 [string]$row.Cwd,
-                [string]$row.Title
+                [string]$row.Title,
+                [string]$row.RolloutPath
             )
         }
         $widths = @{
@@ -2893,108 +3017,141 @@ function Refresh-Threads {
 $script:Form = New-Object System.Windows.Forms.Form
 $script:Form.Text = 'Codex 历史记录同步'
 $script:Form.StartPosition = 'CenterScreen'
-$script:Form.Size = New-Object System.Drawing.Size(1300, 760)
-$script:Form.MinimumSize = New-Object System.Drawing.Size(1180, 640)
+$script:Form.Size = New-Object System.Drawing.Size(1320, 860)
+$script:Form.MinimumSize = New-Object System.Drawing.Size(1180, 820)
 $script:Form.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
-$script:Form.BackColor = [System.Drawing.Color]::FromArgb(245, 247, 250)
+$script:Form.BackColor = [System.Drawing.Color]::FromArgb(241, 245, 249)
 
-$script:Form.Controls.Add((New-Label 'Codex源账号' 12 14 88))
+$headerPanel = New-Object System.Windows.Forms.Panel
+$headerPanel.Location = New-Object System.Drawing.Point(0, 0)
+$headerPanel.Size = New-Object System.Drawing.Size(1304, 62)
+$headerPanel.Anchor = 'Top,Left,Right'
+$headerPanel.BackColor = [System.Drawing.Color]::White
+$script:Form.Controls.Add($headerPanel)
+
+$headerImage = New-Object System.Windows.Forms.PictureBox
+$headerImage.Location = New-Object System.Drawing.Point(18, 4)
+$headerImage.Size = New-Object System.Drawing.Size(220, 56)
+$headerImage.SizeMode = 'CenterImage'
+$headerImage.Image = New-HeaderImage
+$headerPanel.Controls.Add($headerImage)
+
+$headerTitle = New-Object System.Windows.Forms.Label
+$headerTitle.Text = 'Codex 历史记录同步'
+$headerTitle.Location = New-Object System.Drawing.Point(246, 10)
+$headerTitle.Size = New-Object System.Drawing.Size(280, 24)
+$headerTitle.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 12, [System.Drawing.FontStyle]::Bold)
+$headerTitle.ForeColor = [System.Drawing.Color]::FromArgb(15, 23, 42)
+$headerPanel.Controls.Add($headerTitle)
+
+$headerSubTitle = New-Object System.Windows.Forms.Label
+$headerSubTitle.Text = '本地记录迁移、节点启动和完成提醒'
+$headerSubTitle.Location = New-Object System.Drawing.Point(248, 34)
+$headerSubTitle.Size = New-Object System.Drawing.Size(360, 20)
+$headerSubTitle.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
+$headerPanel.Controls.Add($headerSubTitle)
+
+$historyGroup = New-GroupBox '历史筛选' 12 70 500 86
+$script:Form.Controls.Add($historyGroup)
+$historyGroup.Controls.Add((New-Label '源账号' 14 24 50))
 $script:SourceCombo = New-Object System.Windows.Forms.ComboBox
 $script:SourceCombo.DropDownStyle = 'DropDownList'
-$script:SourceCombo.Location = New-Object System.Drawing.Point(104, 12)
-$script:SourceCombo.Size = New-Object System.Drawing.Size(120, 24)
-$script:Form.Controls.Add($script:SourceCombo)
-
-$script:Form.Controls.Add((New-Label 'Codex目标账号' 240 14 96))
+$script:SourceCombo.Location = New-Object System.Drawing.Point(68, 24)
+$script:SourceCombo.Size = New-Object System.Drawing.Size(118, 24)
+$historyGroup.Controls.Add($script:SourceCombo)
+$historyGroup.Controls.Add((New-Label '目标账号' 196 24 62))
 $script:TargetCombo = New-Object System.Windows.Forms.ComboBox
 $script:TargetCombo.DropDownStyle = 'DropDownList'
-$script:TargetCombo.Location = New-Object System.Drawing.Point(340, 12)
-$script:TargetCombo.Size = New-Object System.Drawing.Size(120, 24)
-$script:Form.Controls.Add($script:TargetCombo)
-
-$swapButton = New-Button '交换' 472 10 58
-$script:Form.Controls.Add($swapButton)
-
-$script:Form.Controls.Add((New-Label '显示条数' 548 14 62))
+$script:TargetCombo.Location = New-Object System.Drawing.Point(262, 24)
+$script:TargetCombo.Size = New-Object System.Drawing.Size(118, 24)
+$historyGroup.Controls.Add($script:TargetCombo)
+$swapButton = New-Button '交换' 390 22 58 'Soft'
+$historyGroup.Controls.Add($swapButton)
+$historyGroup.Controls.Add((New-Label '目录' 14 54 42))
+$script:CwdCombo = New-Object System.Windows.Forms.ComboBox
+$script:CwdCombo.DropDownStyle = 'DropDownList'
+$script:CwdCombo.Location = New-Object System.Drawing.Point(68, 54)
+$script:CwdCombo.Size = New-Object System.Drawing.Size(262, 24)
+$script:CwdCombo.DropDownWidth = 900
+$historyGroup.Controls.Add($script:CwdCombo)
+$historyGroup.Controls.Add((New-Label '条数' 342 54 42))
 $script:LimitBox = New-Object System.Windows.Forms.NumericUpDown
-$script:LimitBox.Location = New-Object System.Drawing.Point(614, 12)
-$script:LimitBox.Size = New-Object System.Drawing.Size(60, 24)
+$script:LimitBox.Location = New-Object System.Drawing.Point(386, 54)
+$script:LimitBox.Size = New-Object System.Drawing.Size(58, 24)
 $script:LimitBox.Minimum = 1
 $script:LimitBox.Maximum = 1000
 $script:LimitBox.Value = 50
-$script:Form.Controls.Add($script:LimitBox)
-
+$historyGroup.Controls.Add($script:LimitBox)
 $script:IncludeArchivedBox = New-Object System.Windows.Forms.CheckBox
-$script:IncludeArchivedBox.Text = '包含归档'
-$script:IncludeArchivedBox.Location = New-Object System.Drawing.Point(692, 13)
-$script:IncludeArchivedBox.Size = New-Object System.Drawing.Size(88, 22)
-$script:Form.Controls.Add($script:IncludeArchivedBox)
+$script:IncludeArchivedBox.Text = '归档'
+$script:IncludeArchivedBox.Location = New-Object System.Drawing.Point(448, 55)
+$script:IncludeArchivedBox.Size = New-Object System.Drawing.Size(48, 22)
+$historyGroup.Controls.Add($script:IncludeArchivedBox)
 
-$script:Form.Controls.Add((New-Label '目录筛选' 12 52 70))
-$script:CwdCombo = New-Object System.Windows.Forms.ComboBox
-$script:CwdCombo.DropDownStyle = 'DropDownList'
-$script:CwdCombo.Location = New-Object System.Drawing.Point(86, 50)
-$script:CwdCombo.Size = New-Object System.Drawing.Size(230, 24)
-$script:CwdCombo.DropDownWidth = 900
-$script:Form.Controls.Add($script:CwdCombo)
+$syncGroup = New-GroupBox '同步操作' 524 70 360 86
+$script:Form.Controls.Add($syncGroup)
+$refreshButton = New-Button '刷新' 14 24 62 'Soft'
+$selectAllButton = New-Button '全选' 84 24 58
+$clearSelectionButton = New-Button '清空' 150 24 58
+$cloneButton = New-Button '同步勾选' 216 24 86 'Primary'
+$syncButton = New-Button '同步全部' 14 54 86 'Primary'
+$mirrorButton = New-Button '双向同步' 108 54 86 'Soft'
+$syncGroup.Controls.Add($refreshButton)
+$syncGroup.Controls.Add($selectAllButton)
+$syncGroup.Controls.Add($clearSelectionButton)
+$syncGroup.Controls.Add($cloneButton)
+$syncGroup.Controls.Add($syncButton)
+$syncGroup.Controls.Add($mirrorButton)
 
-$refreshButton = New-Button '刷新' 782 10 58
-$selectAllButton = New-Button '全选' 334 47 54
-$clearSelectionButton = New-Button '清空' 396 47 54
-$cloneButton = New-Button '同步勾选' 458 47 82
-$syncButton = New-Button '同步全部' 548 47 82
-$mirrorButton = New-Button '双向同步' 638 47 84
-$selectCodexHomeButton = New-Button '增加记录目录' 734 47 112
-$script:Form.Controls.Add($selectCodexHomeButton)
-$script:Form.Controls.Add($refreshButton)
-$script:Form.Controls.Add($selectAllButton)
-$script:Form.Controls.Add($clearSelectionButton)
-$script:Form.Controls.Add($cloneButton)
-$script:Form.Controls.Add($syncButton)
-$script:Form.Controls.Add($mirrorButton)
+$pathGroup = New-GroupBox '目录与配置' 896 70 396 86
+$script:Form.Controls.Add($pathGroup)
+$selectCodexHomeButton = New-Button '增加记录目录' 14 24 110
+$openRecordFolderButton = New-Button '打开聊天目录' 132 24 104 'Soft'
+$openCodexFolderButton = New-Button '打开.codex' 244 24 96
+$selectCcSwitchHomeButton = New-Button '增加节点目录' 14 54 110
+$openConfigButton = New-Button '打开软件配置' 132 54 110 'Soft'
+$pathGroup.Controls.Add($selectCodexHomeButton)
+$pathGroup.Controls.Add($openRecordFolderButton)
+$pathGroup.Controls.Add($openCodexFolderButton)
+$pathGroup.Controls.Add($selectCcSwitchHomeButton)
+$pathGroup.Controls.Add($openConfigButton)
 
-$script:Grid = New-Object System.Windows.Forms.DataGridView
-$openCodexFolderButton = New-Button '打开.codex目录' 854 47 112
-$openConfigButton = New-Button '打开软件配置' 974 47 112
-$helpButton = New-Button '帮助' 848 10 54
-$updateButton = New-Button '检查更新' 910 10 82
-$openRecordFolderButton = New-Button '打开记录目录' 516 83 104
-$script:Form.Controls.Add($openCodexFolderButton)
-$script:Form.Controls.Add($openConfigButton)
-$script:Form.Controls.Add($helpButton)
-$script:Form.Controls.Add($updateButton)
-$script:Form.Controls.Add($openRecordFolderButton)
-
-$script:Form.Controls.Add((New-Label 'cc switch节点' 12 88 86))
+$launchGroup = New-GroupBox '启动与提醒' 12 166 642 58
+$script:Form.Controls.Add($launchGroup)
+$launchGroup.Controls.Add((New-Label 'cc switch节点' 14 24 86))
 $script:CodexProviderCombo = New-Object System.Windows.Forms.ComboBox
 $script:CodexProviderCombo.DropDownStyle = 'DropDownList'
-$script:CodexProviderCombo.Location = New-Object System.Drawing.Point(104, 86)
+$script:CodexProviderCombo.Location = New-Object System.Drawing.Point(104, 24)
 $script:CodexProviderCombo.Size = New-Object System.Drawing.Size(190, 24)
-$script:Form.Controls.Add($script:CodexProviderCombo)
-$openCodexButton = New-Button '从终端启动' 302 83 104
-$script:Form.Controls.Add($openCodexButton)
-
+$launchGroup.Controls.Add($script:CodexProviderCombo)
+$openCodexButton = New-Button '从终端启动' 304 22 104 'Primary'
+$launchGroup.Controls.Add($openCodexButton)
 $script:UsePowerShellLaunchBox = New-Object System.Windows.Forms.CheckBox
-$script:UsePowerShellLaunchBox.Text = '用 PowerShell'
-$script:UsePowerShellLaunchBox.Location = New-Object System.Drawing.Point(414, 87)
-$script:UsePowerShellLaunchBox.Size = New-Object System.Drawing.Size(96, 22)
+$script:UsePowerShellLaunchBox.Text = 'PowerShell'
+$script:UsePowerShellLaunchBox.Location = New-Object System.Drawing.Point(418, 25)
+$script:UsePowerShellLaunchBox.Size = New-Object System.Drawing.Size(92, 22)
 $script:UsePowerShellLaunchBox.Checked = $false
-$script:Form.Controls.Add($script:UsePowerShellLaunchBox)
-
+$launchGroup.Controls.Add($script:UsePowerShellLaunchBox)
 $script:TurnEndedNotifyBox = New-Object System.Windows.Forms.CheckBox
-$script:TurnEndedNotifyBox.Text = '每次完成弹窗'
-$script:TurnEndedNotifyBox.Location = New-Object System.Drawing.Point(626, 87)
-$script:TurnEndedNotifyBox.Size = New-Object System.Drawing.Size(108, 22)
+$script:TurnEndedNotifyBox.Text = '完成弹窗'
+$script:TurnEndedNotifyBox.Location = New-Object System.Drawing.Point(512, 25)
+$script:TurnEndedNotifyBox.Size = New-Object System.Drawing.Size(82, 22)
 $script:TurnEndedNotifyBox.Checked = $true
-$script:Form.Controls.Add($script:TurnEndedNotifyBox)
+$launchGroup.Controls.Add($script:TurnEndedNotifyBox)
+$testNotifyButton = New-Button '测试' 596 22 42
+$launchGroup.Controls.Add($testNotifyButton)
 
-$testNotifyButton = New-Button '测试弹窗' 738 83 72
-$selectCcSwitchHomeButton = New-Button '增加节点目录' 818 83 104
-$script:Form.Controls.Add($testNotifyButton)
-$script:Form.Controls.Add($selectCcSwitchHomeButton)
+$supportGroup = New-GroupBox '帮助与更新' 666 166 226 58
+$script:Form.Controls.Add($supportGroup)
+$helpButton = New-Button '帮助' 14 22 86 'Soft'
+$updateButton = New-Button '检查更新' 110 22 96
+$supportGroup.Controls.Add($helpButton)
+$supportGroup.Controls.Add($updateButton)
 
-$script:Grid.Location = New-Object System.Drawing.Point(12, 122)
-$script:Grid.Size = New-Object System.Drawing.Size(1250, 374)
+$script:Grid = New-Object System.Windows.Forms.DataGridView
+
+$script:Grid.Location = New-Object System.Drawing.Point(12, 236)
+$script:Grid.Size = New-Object System.Drawing.Size(1280, 372)
 $script:Grid.Anchor = 'Top,Left,Right,Bottom'
 $script:Grid.ReadOnly = $false
 $script:Grid.MultiSelect = $false
@@ -3011,7 +3168,8 @@ $gridColumns = @(
     @{ Name = 'Archived'; Header = '已归档'; Width = 80; Type = 'Check' },
     @{ Name = 'Id'; Header = '线程 ID'; Width = 260; Type = 'Text' },
     @{ Name = 'Cwd'; Header = '工作目录'; Width = 260; Type = 'Text' },
-    @{ Name = 'Title'; Header = '标题'; Width = 280; Type = 'Text'; Fill = $true }
+    @{ Name = 'Title'; Header = '标题'; Width = 280; Type = 'Text'; Fill = $true },
+    @{ Name = 'RolloutPath'; Header = '记录文件'; Width = 80; Type = 'Text'; Hidden = $true }
 )
 foreach ($definition in $gridColumns) {
     if ($definition.Type -eq 'Check') {
@@ -3028,13 +3186,16 @@ foreach ($definition in $gridColumns) {
     if ($definition.Fill) {
         $column.AutoSizeMode = 'Fill'
     }
+    if ($definition.Hidden) {
+        $column.Visible = $false
+    }
     [void]$script:Grid.Columns.Add($column)
 }
 $script:Form.Controls.Add($script:Grid)
 
 $script:OutputBox = New-Object System.Windows.Forms.TextBox
-$script:OutputBox.Location = New-Object System.Drawing.Point(12, 506)
-$script:OutputBox.Size = New-Object System.Drawing.Size(1250, 170)
+$script:OutputBox.Location = New-Object System.Drawing.Point(12, 620)
+$script:OutputBox.Size = New-Object System.Drawing.Size(1280, 160)
 $script:OutputBox.Anchor = 'Left,Right,Bottom'
 $script:OutputBox.Multiline = $true
 $script:OutputBox.ReadOnly = $true
@@ -3043,8 +3204,8 @@ $script:OutputBox.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
 $script:Form.Controls.Add($script:OutputBox)
 
 $script:StatusLabel = New-Object System.Windows.Forms.Label
-$script:StatusLabel.Location = New-Object System.Drawing.Point(12, 686)
-$script:StatusLabel.Size = New-Object System.Drawing.Size(1250, 24)
+$script:StatusLabel.Location = New-Object System.Drawing.Point(12, 792)
+$script:StatusLabel.Size = New-Object System.Drawing.Size(1280, 24)
 $script:StatusLabel.Anchor = 'Left,Right,Bottom'
 $script:StatusLabel.Text = '就绪'
 $script:Form.Controls.Add($script:StatusLabel)
@@ -3183,9 +3344,9 @@ $openCodexFolderButton.Add_Click({
 
 $openRecordFolderButton.Add_Click({
         try {
-            $directory = Resolve-LaunchDirectory
+            $directory = Resolve-SelectedRecordDirectory
             Start-Process -FilePath explorer.exe -ArgumentList $directory
-            Append-Log "已打开记录目录：$directory"
+            Append-Log "已打开聊天记录目录：$directory"
         }
         catch {
             Show-GuiError $_
