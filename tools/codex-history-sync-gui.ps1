@@ -31,7 +31,7 @@ public static class CodexHistorySyncWindow {
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$script:AppVersion = '2026.06.13.9'
+$script:AppVersion = '2026.06.13.10'
 $script:AppAuthor = 'zhuofupan'
 $script:GitHubRepo = 'zhuofupan/codex-history-sync-portable'
 $script:GitHubUrl = "https://github.com/$script:GitHubRepo"
@@ -204,7 +204,7 @@ function Get-CcSwitchHomeHelpText {
 如果自动加载不到新增账号：
 - 先在 cc-switch 里确认已经新增并保存 Codex 节点
 - 回到本工具点击【刷新】
-- 仍然没有时，点击【增加cc配置】，选择包含 cc-switch.db 的目录
+- 仍然没有时，点击【导入cc-switch配置】，选择包含 cc-switch.db 的目录
 
 找不到时可以用 Everything 搜索 cc-switch.db，然后选择这个文件所在的目录。
 "@
@@ -876,6 +876,7 @@ $(Get-CodexHomeHelpText)
 
 【cc-switch 节点目录】
 $(Get-CcSwitchHomeHelpText)
+- 【导入cc-switch配置】用于选择包含 cc-switch.db 的 cc-switch 配置目录；软件会从这里读取 Any Router、RightCode、OpenAI Official 等 Codex 节点，用于切换账号和从终端启动。
 
 【配置文件】
 - 点击【软件设置】会打开软件根目录下的 codex-history-sync-config.json。
@@ -1951,7 +1952,7 @@ function Get-CcSwitchProviderById {
     $safe = Quote-Sql $ProviderId
     $rows = Invoke-CcSwitchSqlJson "select id,name,settings_config from providers where app_type='codex' and id=$safe limit 1;"
     if ($rows.Count -eq 0) {
-        throw "找不到 cc-switch Codex 节点 '$ProviderId'。请点击【增加cc配置】选择包含 cc-switch.db 的目录，然后刷新。"
+        throw "找不到 cc-switch Codex 节点 '$ProviderId'。请点击【导入cc-switch配置】选择包含 cc-switch.db 的目录，然后刷新。"
     }
     return $rows[0]
 }
@@ -2707,7 +2708,7 @@ function Invoke-LaunchForProvider {
     $providerLabel = [string]$Combo.SelectedItem
     $providerId = Resolve-CcSwitchProviderId $providerLabel
     if ([string]::IsNullOrWhiteSpace($providerId)) {
-        throw '请先选择 cc switch节点。若下拉菜单为空，请点击【软件设置】填写 ccSwitchHome 后保存，或点击【增加cc配置】选择包含 cc-switch.db 的目录。'
+        throw '请先选择 cc switch节点。若下拉菜单为空，请点击【软件设置】填写 ccSwitchHome 后保存，或点击【导入cc-switch配置】选择包含 cc-switch.db 的目录。'
     }
     $loadCheckedRecord = $script:LoadCheckedRecordBox -and [bool]$script:LoadCheckedRecordBox.Checked
     $resumeSelection = if ($loadCheckedRecord) { Get-LaunchResumeSelection } else { $null }
@@ -2791,6 +2792,113 @@ function Get-LaunchResumeSelection {
         throw '从终端启动一次只能恢复一条勾选记录。请只勾选一条；不勾选则在当前目录新建对话。'
     }
     return $rows[0]
+}
+
+function Get-CurrentGridRow {
+    if (-not $script:Grid) { return $null }
+    if ($script:Grid.CurrentRow -and -not $script:Grid.CurrentRow.IsNewRow) {
+        return $script:Grid.CurrentRow
+    }
+    foreach ($row in $script:Grid.Rows) {
+        if (-not $row.IsNewRow) {
+            $script:Grid.CurrentCell = $row.Cells[0]
+            return $row
+        }
+    }
+    return $null
+}
+
+function Set-CurrentRowChecked {
+    param([bool]$Checked)
+
+    [void]$script:Grid.EndEdit()
+    $row = Get-CurrentGridRow
+    $column = Get-GridColumnByProperty 'Selected'
+    if (-not $row -or -not $column) { return }
+    $row.Cells[$column.Index].Value = $Checked
+}
+
+function Set-OnlyCurrentRowChecked {
+    Set-AllRowsChecked $false
+    Set-CurrentRowChecked $true
+}
+
+function Copy-GridValueToClipboard {
+    param(
+        [Parameter(Mandatory)][string]$ColumnName,
+        [Parameter(Mandatory)][string]$Label
+    )
+
+    $value = [string](Get-CurrentGridValue $ColumnName)
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        [System.Windows.Forms.MessageBox]::Show("当前记录没有可复制的 $Label。", '没有内容', 'OK', 'Information') | Out-Null
+        return
+    }
+    if (Copy-TextToClipboard $value) {
+        Append-Log "已复制$Label：$value"
+    }
+}
+
+function Copy-CurrentCellToClipboard {
+    $cell = $script:Grid.CurrentCell
+    if (-not $cell) { return }
+    $value = [string]$cell.Value
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        [System.Windows.Forms.MessageBox]::Show('当前单元格没有可复制的内容。', '没有内容', 'OK', 'Information') | Out-Null
+        return
+    }
+    if (Copy-TextToClipboard $value) {
+        Append-Log "已复制当前单元格：$value"
+    }
+}
+
+function Open-CurrentWorkspaceDirectory {
+    $cwd = Convert-CodexPath ([string](Get-CurrentGridValue 'Cwd'))
+    if ([string]::IsNullOrWhiteSpace($cwd)) {
+        throw '当前记录没有工作目录。'
+    }
+    if (-not (Test-Path -LiteralPath $cwd -PathType Container)) {
+        throw "工作目录不存在：$cwd"
+    }
+    Start-Process -FilePath explorer.exe -ArgumentList $cwd
+    Append-Log "已打开工作目录：$cwd"
+}
+
+function Invoke-CloneCheckedRowsToTarget {
+    $ids = @(Get-CheckedThreadIds)
+    $target = Resolve-ProviderValue ([string]$script:TargetCombo.SelectedItem)
+    if ($ids.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show('请先勾选要同步的记录。', '未勾选记录', 'OK', 'Information') | Out-Null
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($target)) {
+        [System.Windows.Forms.MessageBox]::Show('请先选择 Codex目标账号。', '未选择 Codex目标账号', 'OK', 'Information') | Out-Null
+        return
+    }
+    $answer = [System.Windows.Forms.MessageBox]::Show(
+        "即将同步 $($ids.Count) 条勾选记录到 $(Get-ProviderLabel $target)。工具会先创建备份。是否继续？",
+        '确认同步勾选记录',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Warning
+    )
+    if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) {
+        Append-Log '已取消。'
+        return
+    }
+
+    foreach ($id in $ids) {
+        Invoke-SyncCli -CommandArgs (@('clone', '-Id', $id, '-To', $target) + (Get-SyncTargetProfileArgs $target)) -SkipConfirm -NoRefresh
+    }
+    Refresh-Providers
+    Refresh-Threads
+}
+
+function Invoke-LaunchCurrentGridRow {
+    Set-OnlyCurrentRowChecked
+    if ($script:LoadCheckedRecordBox) {
+        $script:LoadCheckedRecordBox.Checked = $true
+    }
+    Invoke-LaunchForProvider -Combo $script:CodexProviderCombo
 }
 
 function Set-AllRowsChecked {
@@ -3027,7 +3135,7 @@ $script:Form = New-Object System.Windows.Forms.Form
 $script:Form.Text = 'Codex 历史记录同步'
 $script:Form.StartPosition = 'CenterScreen'
 $script:Form.Size = New-Object System.Drawing.Size(1320, 860)
-$script:Form.MinimumSize = New-Object System.Drawing.Size(1180, 820)
+$script:Form.MinimumSize = New-Object System.Drawing.Size(1320, 820)
 $script:Form.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
 $script:Form.BackColor = [System.Drawing.Color]::FromArgb(241, 245, 249)
 
@@ -3061,9 +3169,9 @@ $headerSubTitle.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
 $headerPanel.Controls.Add($headerSubTitle)
 
 $headerMeta = New-Object System.Windows.Forms.Label
-$headerMeta.Text = "v$script:AppVersion  |  作者 $script:AppAuthor"
-$headerMeta.Location = New-Object System.Drawing.Point(874, 20)
-$headerMeta.Size = New-Object System.Drawing.Size(400, 22)
+$headerMeta.Text = "v$script:AppVersion  |  作者 $script:AppAuthor  |"
+$headerMeta.Location = New-Object System.Drawing.Point(820, 20)
+$headerMeta.Size = New-Object System.Drawing.Size(360, 22)
 $headerMeta.Anchor = 'Top,Right'
 $headerMeta.TextAlign = 'MiddleRight'
 $headerMeta.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
@@ -3071,11 +3179,11 @@ $headerMeta.ForeColor = [System.Drawing.Color]::FromArgb(71, 85, 105)
 $headerPanel.Controls.Add($headerMeta)
 
 $headerGitHub = New-Object System.Windows.Forms.LinkLabel
-$headerGitHub.Text = "GitHub：$script:GitHubRepo"
-$headerGitHub.Location = New-Object System.Drawing.Point(720, 36)
-$headerGitHub.Size = New-Object System.Drawing.Size(554, 20)
+$headerGitHub.Text = 'GitHub'
+$headerGitHub.Location = New-Object System.Drawing.Point(1186, 20)
+$headerGitHub.Size = New-Object System.Drawing.Size(88, 22)
 $headerGitHub.Anchor = 'Top,Right'
-$headerGitHub.TextAlign = 'MiddleRight'
+$headerGitHub.TextAlign = 'MiddleLeft'
 $headerGitHub.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
 $headerGitHub.LinkColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
 $headerGitHub.ActiveLinkColor = [System.Drawing.Color]::FromArgb(29, 78, 216)
@@ -3120,7 +3228,7 @@ $script:IncludeArchivedBox.Location = New-Object System.Drawing.Point(446, 55)
 $script:IncludeArchivedBox.Size = New-Object System.Drawing.Size(48, 22)
 $historyGroup.Controls.Add($script:IncludeArchivedBox)
 
-$syncGroup = New-GroupBox '同步操作' 532 70 360 86
+$syncGroup = New-GroupBox '同步操作' 532 70 328 86
 $script:Form.Controls.Add($syncGroup)
 $refreshButton = New-Button '刷新' 14 24 62 'Soft'
 $selectAllButton = New-Button '全选' 84 24 58
@@ -3135,13 +3243,13 @@ $syncGroup.Controls.Add($cloneButton)
 $syncGroup.Controls.Add($syncButton)
 $syncGroup.Controls.Add($mirrorButton)
 
-$pathGroup = New-GroupBox '目录与配置' 904 70 388 86
+$pathGroup = New-GroupBox '目录与配置' 872 70 420 86
 $script:Form.Controls.Add($pathGroup)
-$selectCodexHomeButton = New-Button '增加聊天记录' 14 24 112
-$openRecordFolderButton = New-Button '打开聊天目录' 136 24 112 'Soft'
-$openCodexFolderButton = New-Button 'codex目录' 258 24 102
-$selectCcSwitchHomeButton = New-Button '增加cc配置' 14 54 112
-$openConfigButton = New-Button '软件设置' 136 54 112 'Soft'
+$selectCodexHomeButton = New-Button '增加聊天记录' 14 24 118
+$openRecordFolderButton = New-Button '打开聊天目录' 142 24 118 'Soft'
+$openCodexFolderButton = New-Button 'codex目录' 270 24 112
+$selectCcSwitchHomeButton = New-Button '导入cc-switch配置' 14 54 154
+$openConfigButton = New-Button '软件设置' 178 54 112 'Soft'
 $pathGroup.Controls.Add($selectCodexHomeButton)
 $pathGroup.Controls.Add($openRecordFolderButton)
 $pathGroup.Controls.Add($openCodexFolderButton)
@@ -3231,6 +3339,109 @@ foreach ($definition in $gridColumns) {
 }
 $script:Form.Controls.Add($script:Grid)
 
+$script:GridContextRowIndex = -1
+$script:GridContextMenu = New-Object System.Windows.Forms.ContextMenuStrip
+$gridOpenRecordDirItem = $script:GridContextMenu.Items.Add('打开聊天目录')
+$gridOpenRecordDirItem.Add_Click({
+        try {
+            $directory = Resolve-SelectedRecordDirectory
+            Start-Process -FilePath explorer.exe -ArgumentList $directory
+            Append-Log "已打开聊天记录目录：$directory"
+        }
+        catch {
+            Show-GuiError $_
+        }
+    })
+$gridOpenWorkspaceItem = $script:GridContextMenu.Items.Add('打开工作目录')
+$gridOpenWorkspaceItem.Add_Click({
+        try {
+            Open-CurrentWorkspaceDirectory
+        }
+        catch {
+            Show-GuiError $_
+        }
+    })
+[void]$script:GridContextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+$gridCopyCellItem = $script:GridContextMenu.Items.Add('复制当前单元格')
+$gridCopyCellItem.Add_Click({ Copy-CurrentCellToClipboard })
+$gridCopyIdItem = $script:GridContextMenu.Items.Add('复制线程 ID')
+$gridCopyIdItem.Add_Click({ Copy-GridValueToClipboard -ColumnName 'Id' -Label '线程 ID' })
+$gridCopyCwdItem = $script:GridContextMenu.Items.Add('复制工作目录')
+$gridCopyCwdItem.Add_Click({ Copy-GridValueToClipboard -ColumnName 'Cwd' -Label '工作目录' })
+$gridCopyTitleItem = $script:GridContextMenu.Items.Add('复制标题')
+$gridCopyTitleItem.Add_Click({ Copy-GridValueToClipboard -ColumnName 'Title' -Label '标题' })
+[void]$script:GridContextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+$gridCheckItem = $script:GridContextMenu.Items.Add('勾选此记录')
+$gridCheckItem.Add_Click({ Set-CurrentRowChecked $true })
+$gridUncheckItem = $script:GridContextMenu.Items.Add('取消勾选此记录')
+$gridUncheckItem.Add_Click({ Set-CurrentRowChecked $false })
+$gridCheckOnlyItem = $script:GridContextMenu.Items.Add('只勾选此记录')
+$gridCheckOnlyItem.Add_Click({ Set-OnlyCurrentRowChecked })
+[void]$script:GridContextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+$gridLaunchItem = $script:GridContextMenu.Items.Add('从终端恢复此记录')
+$gridLaunchItem.Add_Click({
+        try {
+            Invoke-LaunchCurrentGridRow
+        }
+        catch {
+            Show-GuiError $_
+        }
+    })
+$gridCloneCurrentItem = $script:GridContextMenu.Items.Add('同步此记录到目标账号')
+$gridCloneCurrentItem.Add_Click({
+        try {
+            Set-OnlyCurrentRowChecked
+            Invoke-CloneCheckedRowsToTarget
+        }
+        catch {
+            Show-GuiError $_
+        }
+    })
+$gridCloneCheckedItem = $script:GridContextMenu.Items.Add('同步当前勾选到目标账号')
+$gridCloneCheckedItem.Add_Click({
+        try {
+            Invoke-CloneCheckedRowsToTarget
+        }
+        catch {
+            Show-GuiError $_
+        }
+    })
+$script:Grid.ContextMenuStrip = $script:GridContextMenu
+$script:GridContextMenu.Add_Opening({
+        param($Sender, $EventArgs)
+
+        $hasRow = $script:GridContextRowIndex -ge 0 -and $script:Grid.CurrentRow -and -not $script:Grid.CurrentRow.IsNewRow
+        if (-not $hasRow) {
+            $EventArgs.Cancel = $true
+            return
+        }
+        $cwd = Convert-CodexPath ([string](Get-CurrentGridValue 'Cwd'))
+        $gridOpenWorkspaceItem.Enabled = (-not [string]::IsNullOrWhiteSpace($cwd)) -and (Test-Path -LiteralPath $cwd -PathType Container)
+    })
+$script:Grid.Add_MouseDown({
+        param($Sender, $EventArgs)
+
+        if ($EventArgs.Button -ne [System.Windows.Forms.MouseButtons]::Right) { return }
+
+        $hit = $Sender.HitTest($EventArgs.X, $EventArgs.Y)
+        if ($hit.RowIndex -lt 0) {
+            $script:GridContextRowIndex = -1
+            return
+        }
+
+        $script:GridContextRowIndex = $hit.RowIndex
+        $Sender.ClearSelection()
+        $row = $Sender.Rows[$hit.RowIndex]
+        $row.Selected = $true
+        $cellIndex = if ($hit.ColumnIndex -ge 0) { $hit.ColumnIndex } else { 0 }
+        while ($cellIndex -lt $row.Cells.Count -and -not $Sender.Columns[$cellIndex].Visible) {
+            $cellIndex++
+        }
+        if ($cellIndex -lt $row.Cells.Count) {
+            $Sender.CurrentCell = $row.Cells[$cellIndex]
+        }
+    })
+
 $script:OutputBox = New-Object System.Windows.Forms.TextBox
 $script:OutputBox.Location = New-Object System.Drawing.Point(12, 620)
 $script:OutputBox.Size = New-Object System.Drawing.Size(1280, 160)
@@ -3307,32 +3518,12 @@ $swapButton.Add_Click({
     })
 
 $cloneButton.Add_Click({
-        $ids = @(Get-CheckedThreadIds)
-        $target = Resolve-ProviderValue ([string]$script:TargetCombo.SelectedItem)
-        if ($ids.Count -eq 0) {
-            [System.Windows.Forms.MessageBox]::Show('请先勾选要同步的记录。', '未勾选记录', 'OK', 'Information') | Out-Null
-            return
+        try {
+            Invoke-CloneCheckedRowsToTarget
         }
-        if ([string]::IsNullOrWhiteSpace($target)) {
-            [System.Windows.Forms.MessageBox]::Show('请先选择 Codex目标账号。', '未选择 Codex目标账号', 'OK', 'Information') | Out-Null
-            return
+        catch {
+            Show-GuiError $_
         }
-        $answer = [System.Windows.Forms.MessageBox]::Show(
-            "即将同步 $($ids.Count) 条勾选记录到 $(Get-ProviderLabel $target)。工具会先创建备份。是否继续？",
-            '确认同步勾选记录',
-            [System.Windows.Forms.MessageBoxButtons]::YesNo,
-            [System.Windows.Forms.MessageBoxIcon]::Warning
-        )
-        if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) {
-            Append-Log '已取消。'
-            return
-        }
-
-        foreach ($id in $ids) {
-            Invoke-SyncCli -CommandArgs (@('clone', '-Id', $id, '-To', $target) + (Get-SyncTargetProfileArgs $target)) -SkipConfirm -NoRefresh
-        }
-        Refresh-Providers
-        Refresh-Threads
     })
 
 $syncButton.Add_Click({
@@ -3510,7 +3701,7 @@ else {
     Append-Log ("尚未加载 Codex 记录目录。请点击 ""增加聊天记录""。" + "`r`n`r`n" + (Get-CodexHomeHelpText))
 }
 if ([string]::IsNullOrWhiteSpace($script:CcSwitchDb)) {
-    Append-Log ("未找到 cc-switch.db：历史同步可用，切换账号启动功能不可用。请点击 ""增加cc配置""，选择包含 cc-switch.db 的目录。" + "`r`n`r`n" + (Get-CcSwitchHomeHelpText))
+    Append-Log ("未找到 cc-switch.db：历史同步可用，切换账号启动功能不可用。请点击 ""导入cc-switch配置""，选择包含 cc-switch.db 的目录。" + "`r`n`r`n" + (Get-CcSwitchHomeHelpText))
 }
 else {
     Append-Log "cc-switch 数据库：$script:CcSwitchDb"
