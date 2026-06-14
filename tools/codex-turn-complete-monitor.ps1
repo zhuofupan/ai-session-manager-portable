@@ -106,6 +106,7 @@ $script:Buffers = @{}
 $script:Contexts = @{}
 $script:SeenTurns = New-Object 'System.Collections.Generic.HashSet[string]'
 $script:PendingApprovals = @{}
+$script:StartupCompletionGraceSeconds = 60
 Write-DiagnosticLog "monitor started CodexHome='$script:CodexHome' sessions='$script:SessionsDir' pollSeconds=$PollSeconds."
 
 function Shorten-Text {
@@ -270,9 +271,23 @@ function Get-RolloutFiles {
         Where-Object { $_.LastWriteTimeUtc -ge $cutoff -or $script:Offsets.ContainsKey($_.FullName) })
 }
 
+function Test-CompleteJsonLine {
+    param([AllowNull()][string]$Line)
+
+    if ([string]::IsNullOrWhiteSpace($Line)) { return $false }
+    try {
+        [void]($Line | ConvertFrom-Json)
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
 function Initialize-Baseline {
     foreach ($file in Get-RolloutFiles) {
-        $script:Offsets[$file.FullName] = [int64]$file.Length
+        $initialOffset = [Math]::Max([int64]0, ([int64]$file.Length - [int64](256 * 1024)))
+        $script:Offsets[$file.FullName] = [int64]$initialOffset
         $script:Buffers[$file.FullName] = ''
         Initialize-RolloutContext ([string]$file.FullName)
     }
@@ -360,7 +375,7 @@ function Get-ApprovalEventInfo {
         if (-not [string]::IsNullOrWhiteSpace([string]$Object.timestamp)) {
             $eventTime = [DateTimeOffset]::Parse([string]$Object.timestamp)
         }
-        if ($eventTime -lt $script:MonitorStartedAt.AddSeconds(-2)) { return $null }
+        if ($eventTime -lt $script:MonitorStartedAt.AddSeconds(-1 * [int]$script:StartupCompletionGraceSeconds)) { return $null }
 
         $payload = $Object.payload
         $typeText = @(
@@ -587,7 +602,7 @@ function Get-TaskCompleteKey {
         if (-not [string]::IsNullOrWhiteSpace([string]$Object.timestamp)) {
             $eventTime = [DateTimeOffset]::Parse([string]$Object.timestamp)
         }
-        if ($eventTime -lt $script:MonitorStartedAt.AddSeconds(-2)) { return $null }
+        if ($eventTime -lt $script:MonitorStartedAt.AddSeconds(-1 * [int]$script:StartupCompletionGraceSeconds)) { return $null }
 
         $turnId = [string]$Object.payload.turn_id
         if ([string]::IsNullOrWhiteSpace($turnId)) {
@@ -622,8 +637,14 @@ function Process-RolloutFile {
     $parts = $combined -split "`n"
     $count = $parts.Count
     if (-not $endsWithNewline -and $count -gt 0) {
-        $script:Buffers[$path] = $parts[$count - 1]
-        $count--
+        $tail = [string]$parts[$count - 1]
+        if (Test-CompleteJsonLine $tail) {
+            $script:Buffers[$path] = ''
+        }
+        else {
+            $script:Buffers[$path] = $tail
+            $count--
+        }
     }
     else {
         $script:Buffers[$path] = ''

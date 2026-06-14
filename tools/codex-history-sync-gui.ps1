@@ -33,7 +33,7 @@ public static class CodexHistorySyncWindow {
 [System.Windows.Forms.Application]::EnableVisualStyles()
 [System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException)
 
-$script:AppVersion = '2026.06.14.01'
+$script:AppVersion = '2026.06.14.02'
 $script:AppAuthor = 'Joff Pan'
 $script:GitHubRepo = 'zhuofupan/codex-history-sync-portable'
 $script:GitHubUrl = "https://github.com/$script:GitHubRepo"
@@ -328,7 +328,7 @@ $script:UiStrings = @{
         MenuOpenWorkspace    = '打开项目目录'
         MenuCopyCell         = '复制此单元格'
         MenuCheckOnly        = '只勾选此条'
-        MenuCheckExcept      = '勾选除此所有条'
+        MenuCheckExcept      = '勾选此外所有条'
         MenuLaunchTerminal   = '启动终端'
         MenuLaunchWithChat   = '启动终端（+聊天）'
         MenuSyncTo           = '同步此条至'
@@ -5015,7 +5015,7 @@ $gridCopyCellItem.Add_Click({ Copy-CurrentCellToClipboard })
 [void]$script:GridContextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 $gridCheckOnlyItem = $script:GridContextMenu.Items.Add('只勾选此条')
 $gridCheckOnlyItem.Add_Click({ Set-OnlyCurrentRowChecked })
-$gridCheckExceptItem = $script:GridContextMenu.Items.Add('勾选除此所有条')
+$gridCheckExceptItem = $script:GridContextMenu.Items.Add('勾选此外所有条')
 $gridCheckExceptItem.Add_Click({ Set-AllRowsExceptCurrentChecked })
 $script:Grid.ContextMenuStrip = $script:GridContextMenu
 $script:GridContextMenu.Add_Opening({
