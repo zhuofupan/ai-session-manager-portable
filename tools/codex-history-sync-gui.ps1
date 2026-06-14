@@ -33,7 +33,7 @@ public static class CodexHistorySyncWindow {
 [System.Windows.Forms.Application]::EnableVisualStyles()
 [System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException)
 
-$script:AppVersion = '2026.06.14.05'
+$script:AppVersion = '2026.06.15.01'
 $script:AppAuthor = 'Joff Pan'
 $script:GitHubRepo = 'zhuofupan/codex-history-sync-portable'
 $script:GitHubUrl = "https://github.com/$script:GitHubRepo"
@@ -638,9 +638,8 @@ function Get-HistoryProviderFromCcSwitchProvider {
 
     $id = [string]$ProviderRow.id
     $name = [string]$ProviderRow.name
-    $normalizedId = Normalize-ProviderKey $id
     $normalizedName = Normalize-ProviderKey $name
-    if ($normalizedId -eq 'codex-official') { return 'openai' }
+    if (Test-CcSwitchOfficialProvider $ProviderRow) { return 'openai' }
     if ($normalizedName -eq 'any router' -or $normalizedName -eq 'anyrouter') { return 'custom' }
     if ($normalizedName -match 'right\s*code|rightcode') { return 'rightcode' }
 
@@ -3405,6 +3404,23 @@ function Repair-CodexProviderSettingsAuth {
         return [pscustomobject]@{ Settings = $Settings; Changed = $false }
     }
 
+    $changed = $false
+    $auth = $Settings.auth
+    if ($auth) {
+        $authMode = Normalize-ProviderKey ([string]$auth.auth_mode)
+        $apiKey = [string]$auth.OPENAI_API_KEY
+        $idToken = [string]$auth.tokens.id_token
+        if ([string]::IsNullOrWhiteSpace($authMode) -and
+            [string]::IsNullOrWhiteSpace($apiKey) -and
+            -not [string]::IsNullOrWhiteSpace($idToken)) {
+            Set-JsonObjectStringProperty -Object $auth -Name 'auth_mode' -Value 'chatgpt'
+            $Settings.auth = $auth
+            $changed = $true
+            Append-Log '已补齐 OpenAI Official 的 auth_mode=chatgpt。'
+            Write-DiagnosticLog 'Repaired OpenAI Official auth_mode to chatgpt from OAuth token structure.'
+        }
+    }
+
     $repair = Repair-CodexChatGptAuthMetadata $Settings.auth
     if (-not [bool]$repair.Valid) {
         throw "OpenAI Official 的 ChatGPT 登录信息不完整，缺少 $($repair.Missing)。请先运行 codex login 或在 cc-switch 中重新保存 OpenAI Official 后再启动。已阻止写入无效 auth.json。"
@@ -3415,7 +3431,7 @@ function Repair-CodexProviderSettingsAuth {
         Append-Log '已从 OpenAI id_token 自动补齐 OpenAI Official 的 email/plan_type 登录元数据。'
         Write-DiagnosticLog 'Repaired OpenAI Official auth metadata from id_token claims.'
     }
-    return [pscustomobject]@{ Settings = $Settings; Changed = [bool]$repair.Changed }
+    return [pscustomobject]@{ Settings = $Settings; Changed = ($changed -or [bool]$repair.Changed) }
 }
 
 function Update-CcSwitchProviderSettingsConfig {
@@ -3435,7 +3451,119 @@ function Update-CcSwitchProviderSettingsConfig {
     if ($LASTEXITCODE -ne 0) {
         $message = (($output | ForEach-Object { [string]$_ }) -join ' ').Trim()
         if ([string]::IsNullOrWhiteSpace($message)) { $message = "sqlite3 exit code $LASTEXITCODE" }
-        throw "更新 cc-switch OpenAI Official 登录元数据失败：$message"
+        throw "更新 cc-switch OpenAI Official 登录/启动配置失败：$message"
+    }
+}
+
+function Remove-CodexConfigStringValue {
+    param(
+        [AllowNull()][string]$Config,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Config)) { return $Config }
+    $pattern = '(?m)^\s*' + [regex]::Escape($Name) + '\s*=\s*["''][^"'']*["'']\s*(?:\r?\n)?'
+    return [System.Text.RegularExpressions.Regex]::Replace($Config, $pattern, '')
+}
+
+function Set-CodexConfigStringValue {
+    param(
+        [AllowNull()][string]$Config,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Value
+    )
+
+    if ($null -eq $Config) { $Config = '' }
+    $escapedValue = $Value.Replace('\', '\\').Replace('"', '\"')
+    $line = "$Name = `"$escapedValue`""
+    $pattern = '(?m)^(\s*' + [regex]::Escape($Name) + '\s*=\s*["''])([^"'']*)(["'']\s*)$'
+    if ([System.Text.RegularExpressions.Regex]::IsMatch($Config, $pattern)) {
+        return [System.Text.RegularExpressions.Regex]::Replace(
+            $Config,
+            $pattern,
+            { param($match) $match.Groups[1].Value + $escapedValue + $match.Groups[3].Value },
+            1
+        )
+    }
+
+    $sectionMatch = [System.Text.RegularExpressions.Regex]::Match($Config, '(?m)^\s*\[')
+    if ($sectionMatch.Success) {
+        $prefix = $Config.Substring(0, $sectionMatch.Index)
+        $suffix = $Config.Substring($sectionMatch.Index)
+        if (-not [string]::IsNullOrWhiteSpace($prefix) -and -not $prefix.EndsWith([Environment]::NewLine)) {
+            $prefix += [Environment]::NewLine
+        }
+        return $prefix + $line + [Environment]::NewLine + $suffix
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($Config) -and -not $Config.EndsWith([Environment]::NewLine)) {
+        $Config += [Environment]::NewLine
+    }
+    return $Config + $line + [Environment]::NewLine
+}
+
+function Repair-OfficialCodexConfig {
+    param([AllowNull()][string]$Config)
+
+    if ($null -eq $Config) { $Config = '' }
+    $changed = $false
+    $configText = [string]$Config
+
+    $modelProvider = Normalize-ProviderKey (Get-CodexConfigStringValue $configText 'model_provider')
+    if (-not [string]::IsNullOrWhiteSpace($modelProvider) -and $modelProvider -ne 'openai') {
+        $configText = Remove-CodexConfigStringValue -Config $configText -Name 'model_provider'
+        $changed = $true
+    }
+
+    $preferredAuth = Normalize-ProviderKey (Get-CodexConfigStringValue $configText 'preferred_auth_method')
+    if ($preferredAuth -ne 'chatgpt') {
+        $configText = Set-CodexConfigStringValue -Config $configText -Name 'preferred_auth_method' -Value 'chatgpt'
+        $changed = $true
+    }
+
+    if ($changed) {
+        Append-Log '已修正 OpenAI Official 启动配置：移除非官方 model_provider，并设置 preferred_auth_method=chatgpt。'
+        Write-DiagnosticLog 'Repaired OpenAI Official config to avoid custom/API router launch.'
+    }
+
+    return $configText
+}
+
+function Assert-CodexLaunchConfigMatchesProvider {
+    param(
+        [Parameter(Mandatory)]$Provider,
+        [AllowNull()][string]$Config,
+        [AllowNull()]$Auth,
+        [string]$Context = 'settings'
+    )
+
+    $modelProvider = Normalize-ProviderKey (Get-CodexConfigStringValue $Config 'model_provider')
+    $preferredAuth = Normalize-ProviderKey (Get-CodexConfigStringValue $Config 'preferred_auth_method')
+    $authMode = Normalize-ProviderKey ([string]$Auth.auth_mode)
+    $hasApiKey = -not [string]::IsNullOrWhiteSpace([string]$Auth.OPENAI_API_KEY)
+    $hasIdToken = -not [string]::IsNullOrWhiteSpace([string]$Auth.tokens.id_token)
+    $providerName = [string]$Provider.name
+    $providerId = [string]$Provider.id
+    Write-DiagnosticLog ("Launch config summary context='{0}' provider='{1}' id='{2}' model_provider='{3}' preferred_auth_method='{4}' auth_mode='{5}' has_api_key='{6}' has_id_token='{7}'." -f
+        $Context,
+        $providerName,
+        $providerId,
+        $modelProvider,
+        $preferredAuth,
+        $authMode,
+        $hasApiKey,
+        $hasIdToken)
+
+    if (-not (Test-CcSwitchOfficialProvider $Provider)) { return }
+
+    if (-not [string]::IsNullOrWhiteSpace($modelProvider) -and $modelProvider -ne 'openai') {
+        throw "OpenAI Official 节点的 config.toml 仍指向 model_provider='$modelProvider'，已阻止启动，避免官方聊天实际走 Any Router。请重新加载或修复 cc-switch.db。"
+    }
+    if ($preferredAuth -eq 'apikey' -or $authMode -eq 'apikey' -or $hasApiKey) {
+        throw "OpenAI Official 节点仍是 API Key 启动方式，已阻止启动。请先运行 codex login 或在 cc-switch 中重新保存 OpenAI Official。"
+    }
+    if ($authMode -ne 'chatgpt' -or -not $hasIdToken) {
+        throw "OpenAI Official 节点缺少 ChatGPT/OAuth 登录结构，已阻止启动。请先运行 codex login 或在 cc-switch 中重新保存 OpenAI Official。"
     }
 }
 
@@ -3492,7 +3620,11 @@ function Get-SyncTargetProfileArgs {
 function Test-CcSwitchOfficialProvider {
     param([Parameter(Mandatory)]$Provider)
 
-    return ([string]$Provider.id) -eq 'codex-official'
+    $id = Normalize-ProviderKey ([string]$Provider.id)
+    $name = Normalize-ProviderKey ([string]$Provider.name)
+    if ($id -eq 'codex-official') { return $true }
+    if ($name -match '\bopenai\b' -and $name -match '\bofficial\b') { return $true }
+    return $false
 }
 
 function Normalize-ProviderKey {
@@ -4177,18 +4309,30 @@ function Switch-CodexProviderRow {
     $configText = Normalize-CodexConfig ([string]$settings.config) `
         -DisableCodexAppsOnFast:$disableCodexAppsOnFast `
         -EnableTurnEndedNotify:$enableTurnEndedNotify
+    $settingsConfigChanged = $false
+    if (Test-CcSwitchOfficialProvider $provider) {
+        $originalOfficialConfig = $configText
+        $configText = Repair-OfficialCodexConfig $configText
+        if ($configText -ne $originalOfficialConfig) {
+            $settings.config = $configText
+            $settingsConfigChanged = $true
+        }
+    }
+    Assert-CodexLaunchConfigMatchesProvider -Provider $provider -Config $configText -Auth $settings.auth -Context 'settings'
     [System.IO.File]::WriteAllText($authPath, $authJson, $script:Utf8NoBom)
     [System.IO.File]::WriteAllText($configPath, $configText, $script:Utf8NoBom)
+    $writtenConfigText = [System.IO.File]::ReadAllText($configPath, $script:Utf8NoBom)
+    Assert-CodexLaunchConfigMatchesProvider -Provider $provider -Config $writtenConfigText -Auth $settings.auth -Context 'written-file'
     if (-not [string]::IsNullOrWhiteSpace($script:LastCodexConfigFix)) {
         Append-Log $script:LastCodexConfigFix
     }
-    if ([bool]$settingsRepair.Changed) {
+    if ([bool]$settingsRepair.Changed -or $settingsConfigChanged) {
         try {
             Update-CcSwitchProviderSettingsConfig -ProviderId ([string]$provider.id) -Settings $settings
-            Append-Log '已同步修复后的 OpenAI Official 登录元数据到 cc-switch.db。'
+            Append-Log '已同步修复后的 OpenAI Official 登录/启动配置到 cc-switch.db。'
         }
         catch {
-            Append-Log "已修复本次启动的 OpenAI 登录元数据，但写回 cc-switch.db 失败：$($_.Exception.Message)"
+            Append-Log "已修复本次启动的 OpenAI 登录/启动配置，但写回 cc-switch.db 失败：$($_.Exception.Message)"
         }
     }
 
