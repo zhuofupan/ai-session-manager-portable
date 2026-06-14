@@ -33,7 +33,7 @@ public static class CodexHistorySyncWindow {
 [System.Windows.Forms.Application]::EnableVisualStyles()
 [System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException)
 
-$script:AppVersion = '2026.06.15.01'
+$script:AppVersion = '2026.06.15.02'
 $script:AppAuthor = 'Joff Pan'
 $script:GitHubRepo = 'zhuofupan/codex-history-sync-portable'
 $script:GitHubUrl = "https://github.com/$script:GitHubRepo"
@@ -777,8 +777,16 @@ function Reset-CcSwitchAccountCombo {
     $usedLabels = @{}
     $preferred = $null
     $shownLabels = New-Object System.Collections.Generic.List[string]
+    $skippedInvalidOfficial = 0
+    $history = Normalize-ProviderKey $HistoryProvider
 
     foreach ($provider in $Providers) {
+        if ($history -eq 'openai' -and
+            (Test-CcSwitchOfficialProvider $provider) -and
+            -not (Test-CcSwitchOfficialProviderHasOAuthAuth $provider)) {
+            $skippedInvalidOfficial++
+            continue
+        }
         if (-not (Test-CcSwitchProviderAllowedForHistoryProvider -ProviderRow $provider -HistoryProvider $HistoryProvider)) {
             continue
         }
@@ -802,7 +810,6 @@ function Reset-CcSwitchAccountCombo {
         }
     }
 
-    $history = Normalize-ProviderKey $HistoryProvider
     if ([string]::IsNullOrWhiteSpace($preferred) -and $history -eq 'openai') {
         $preferred = 'codex-official'
     }
@@ -825,7 +832,7 @@ function Reset-CcSwitchAccountCombo {
         $script:CodexProviderCombo.SelectedIndex = 0
     }
 
-    Write-DiagnosticLog ("CcSwitch combo reset history='{0}' selected='{1}' items=[{2}]" -f $HistoryProvider, ([string]$script:CodexProviderCombo.SelectedItem), ($shownLabels.ToArray() -join ', '))
+    Write-DiagnosticLog ("CcSwitch combo reset history='{0}' selected='{1}' skippedInvalidOfficial={2} items=[{3}]" -f $HistoryProvider, ([string]$script:CodexProviderCombo.SelectedItem), $skippedInvalidOfficial, ($shownLabels.ToArray() -join ', '))
 }
 
 function Get-CurrentSourceProvider {
@@ -1633,11 +1640,7 @@ function Append-Log {
 function Show-GuiError {
     param([Parameter(Mandatory)]$ErrorRecord)
 
-    $line = $ErrorRecord.InvocationInfo.ScriptLineNumber
     $message = $ErrorRecord.Exception.Message
-    if ($line) {
-        $message = "第 $line 行：$message"
-    }
     Write-DiagnosticLog ("Show-GuiError: " + (Format-DiagnosticError $ErrorRecord))
     Append-Log $message
     if ($SelfTest) {
@@ -3560,10 +3563,10 @@ function Assert-CodexLaunchConfigMatchesProvider {
         throw "OpenAI Official 节点的 config.toml 仍指向 model_provider='$modelProvider'，已阻止启动，避免官方聊天实际走 Any Router。请重新加载或修复 cc-switch.db。"
     }
     if ($preferredAuth -eq 'apikey' -or $authMode -eq 'apikey' -or $hasApiKey) {
-        throw "OpenAI Official 节点仍是 API Key 启动方式，已阻止启动。请先运行 codex login 或在 cc-switch 中重新保存 OpenAI Official。"
+        throw "OpenAI Official 节点实际保存的是 API Key auth.json，已阻止启动。请先把本机 Codex 恢复为官方 ChatGPT 登录：关闭 Codex，备份并移走 $CodexHome\auth.json，确认没有 OPENAI_API_KEY 环境变量后运行 codex login。登录成功后再到 cc-switch 新建官方供应商；不要在官方供应商里填写 API Key。"
     }
     if ($authMode -ne 'chatgpt' -or -not $hasIdToken) {
-        throw "OpenAI Official 节点缺少 ChatGPT/OAuth 登录结构，已阻止启动。请先运行 codex login 或在 cc-switch 中重新保存 OpenAI Official。"
+        throw "OpenAI Official 节点缺少 ChatGPT/OAuth 登录结构，已阻止启动。请先运行 codex login 完成官方登录，再到 cc-switch 新建官方供应商。"
     }
 }
 
@@ -3627,6 +3630,43 @@ function Test-CcSwitchOfficialProvider {
     return $false
 }
 
+function Get-CcSwitchProviderAuthShape {
+    param([AllowNull()]$Provider)
+
+    $authMode = ''
+    $hasApiKey = $false
+    $hasIdToken = $false
+    try {
+        if ($Provider) {
+            $settings = [string]$Provider.settings_config | ConvertFrom-Json
+            if ($settings -and $settings.auth) {
+                $authMode = Normalize-ProviderKey ([string]$settings.auth.auth_mode)
+                $hasApiKey = -not [string]::IsNullOrWhiteSpace([string]$settings.auth.OPENAI_API_KEY)
+                $hasIdToken = -not [string]::IsNullOrWhiteSpace([string]$settings.auth.tokens.id_token)
+            }
+        }
+    }
+    catch {
+        Write-DiagnosticLog ("Failed to inspect cc-switch provider auth shape id='{0}': {1}" -f ([string]$Provider.id), $_.Exception.Message)
+    }
+
+    return [pscustomobject]@{
+        AuthMode   = $authMode
+        HasApiKey  = $hasApiKey
+        HasIdToken = $hasIdToken
+    }
+}
+
+function Test-CcSwitchOfficialProviderHasOAuthAuth {
+    param([Parameter(Mandatory)]$Provider)
+
+    if (-not (Test-CcSwitchOfficialProvider $Provider)) { return $false }
+    $shape = Get-CcSwitchProviderAuthShape $Provider
+    if ($shape.HasApiKey) { return $false }
+    if (-not $shape.HasIdToken) { return $false }
+    return ([string]::IsNullOrWhiteSpace([string]$shape.AuthMode) -or $shape.AuthMode -eq 'chatgpt')
+}
+
 function Normalize-ProviderKey {
     param([AllowNull()][string]$Value)
 
@@ -3642,6 +3682,12 @@ function Test-CcSwitchProviderAllowedForHistoryProvider {
 
     $history = Normalize-ProviderKey $HistoryProvider
     if ([string]::IsNullOrWhiteSpace($history)) { return $true }
+
+    if ($history -eq 'openai' -and
+        (Test-CcSwitchOfficialProvider $ProviderRow) -and
+        -not (Test-CcSwitchOfficialProviderHasOAuthAuth $ProviderRow)) {
+        return $false
+    }
 
     $mappedHistory = Normalize-ProviderKey (Get-HistoryProviderFromCcSwitchProvider $ProviderRow)
     if ($history -in @('openai', 'custom', 'rightcode')) {
