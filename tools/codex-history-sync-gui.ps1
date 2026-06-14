@@ -33,7 +33,7 @@ public static class CodexHistorySyncWindow {
 [System.Windows.Forms.Application]::EnableVisualStyles()
 [System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException)
 
-$script:AppVersion = '2026.06.15.02'
+$script:AppVersion = '2026.06.15.03'
 $script:AppAuthor = 'Joff Pan'
 $script:GitHubRepo = 'zhuofupan/codex-history-sync-portable'
 $script:GitHubUrl = "https://github.com/$script:GitHubRepo"
@@ -3355,6 +3355,32 @@ function Set-JsonObjectStringProperty {
     }
 }
 
+function Copy-JsonObject {
+    param([AllowNull()]$Object)
+
+    if ($null -eq $Object) { return $null }
+    return ($Object | ConvertTo-Json -Depth 100 -Compress | ConvertFrom-Json)
+}
+
+function Get-CodexAuthShape {
+    param([AllowNull()]$Auth)
+
+    $authMode = ''
+    $hasApiKey = $false
+    $hasIdToken = $false
+    if ($Auth) {
+        $authMode = Normalize-ProviderKey ([string]$Auth.auth_mode)
+        $hasApiKey = -not [string]::IsNullOrWhiteSpace([string]$Auth.OPENAI_API_KEY)
+        $hasIdToken = -not [string]::IsNullOrWhiteSpace([string]$Auth.tokens.id_token)
+    }
+
+    return [pscustomobject]@{
+        AuthMode   = $authMode
+        HasApiKey  = $hasApiKey
+        HasIdToken = $hasIdToken
+    }
+}
+
 function Repair-CodexChatGptAuthMetadata {
     param([AllowNull()]$Auth)
 
@@ -3397,6 +3423,86 @@ function Repair-CodexChatGptAuthMetadata {
     }
 }
 
+function Repair-OpenAiOfficialAuthObject {
+    param([AllowNull()]$Auth)
+
+    if ($null -eq $Auth) {
+        return [pscustomobject]@{ Auth = $Auth; Changed = $false; Valid = $false; Missing = 'auth'; Reason = 'missing-auth' }
+    }
+
+    $changed = $false
+    $shape = Get-CodexAuthShape $Auth
+    if ($shape.HasApiKey) {
+        return [pscustomobject]@{ Auth = $Auth; Changed = $false; Valid = $false; Missing = 'oauth auth'; Reason = 'api-key' }
+    }
+    if (-not $shape.HasIdToken) {
+        return [pscustomobject]@{ Auth = $Auth; Changed = $false; Valid = $false; Missing = 'id_token'; Reason = 'missing-id-token' }
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$shape.AuthMode)) {
+        Set-JsonObjectStringProperty -Object $Auth -Name 'auth_mode' -Value 'chatgpt'
+        $changed = $true
+        $shape = Get-CodexAuthShape $Auth
+    }
+    if ($shape.AuthMode -ne 'chatgpt') {
+        return [pscustomobject]@{ Auth = $Auth; Changed = $changed; Valid = $false; Missing = 'auth_mode=chatgpt'; Reason = 'wrong-auth-mode' }
+    }
+
+    $repair = Repair-CodexChatGptAuthMetadata $Auth
+    if (-not [bool]$repair.Valid) {
+        return [pscustomobject]@{ Auth = $repair.Auth; Changed = ($changed -or [bool]$repair.Changed); Valid = $false; Missing = $repair.Missing; Reason = 'incomplete-chatgpt-auth' }
+    }
+
+    return [pscustomobject]@{ Auth = $repair.Auth; Changed = ($changed -or [bool]$repair.Changed); Valid = $true; Missing = ''; Reason = '' }
+}
+
+function Get-RecoverableOpenAiOfficialAuth {
+    if ([string]::IsNullOrWhiteSpace($CodexHome) -or -not (Test-Path -LiteralPath $CodexHome -PathType Container)) {
+        return $null
+    }
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    $currentAuthPath = Join-Path $CodexHome 'auth.json'
+    if (Test-Path -LiteralPath $currentAuthPath -PathType Leaf) {
+        [void]$candidates.Add($currentAuthPath)
+    }
+
+    $backupRoot = Join-Path $CodexHome 'backups'
+    if (Test-Path -LiteralPath $backupRoot -PathType Container) {
+        try {
+            foreach ($hit in @(Get-ChildItem -LiteralPath $backupRoot -Recurse -Filter 'auth.json' -File -ErrorAction SilentlyContinue |
+                    Sort-Object LastWriteTimeUtc -Descending |
+                    Select-Object -First 80)) {
+                if (-not $candidates.Contains($hit.FullName)) {
+                    [void]$candidates.Add($hit.FullName)
+                }
+            }
+        }
+        catch {
+            Write-DiagnosticLog ("Failed to scan Codex auth backups: " + $_.Exception.Message)
+        }
+    }
+
+    foreach ($path in $candidates) {
+        try {
+            $auth = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+            $authCopy = Copy-JsonObject $auth
+            $repair = Repair-OpenAiOfficialAuthObject $authCopy
+            if ([bool]$repair.Valid) {
+                Write-DiagnosticLog ("Found recoverable OpenAI Official OAuth auth at '{0}'." -f $path)
+                return [pscustomobject]@{
+                    Auth   = $repair.Auth
+                    Source = $path
+                }
+            }
+        }
+        catch {
+            Write-DiagnosticLog ("Skipped invalid auth recovery candidate '{0}': {1}" -f $path, $_.Exception.Message)
+        }
+    }
+
+    return $null
+}
+
 function Repair-CodexProviderSettingsAuth {
     param(
         [Parameter(Mandatory)]$Provider,
@@ -3408,31 +3514,26 @@ function Repair-CodexProviderSettingsAuth {
     }
 
     $changed = $false
-    $auth = $Settings.auth
-    if ($auth) {
-        $authMode = Normalize-ProviderKey ([string]$auth.auth_mode)
-        $apiKey = [string]$auth.OPENAI_API_KEY
-        $idToken = [string]$auth.tokens.id_token
-        if ([string]::IsNullOrWhiteSpace($authMode) -and
-            [string]::IsNullOrWhiteSpace($apiKey) -and
-            -not [string]::IsNullOrWhiteSpace($idToken)) {
-            Set-JsonObjectStringProperty -Object $auth -Name 'auth_mode' -Value 'chatgpt'
-            $Settings.auth = $auth
+    $repair = Repair-OpenAiOfficialAuthObject $Settings.auth
+    if (-not [bool]$repair.Valid) {
+        $recovered = Get-RecoverableOpenAiOfficialAuth
+        if ($recovered) {
+            $Settings.auth = $recovered.Auth
             $changed = $true
-            Append-Log '已补齐 OpenAI Official 的 auth_mode=chatgpt。'
-            Write-DiagnosticLog 'Repaired OpenAI Official auth_mode to chatgpt from OAuth token structure.'
+            Append-Log "已从本机 Codex 备份自动恢复 OpenAI Official 的 ChatGPT 登录信息：$($recovered.Source)"
+            Write-DiagnosticLog ("Recovered OpenAI Official OAuth auth for provider id='{0}' from '{1}'." -f ([string]$Provider.id), ([string]$recovered.Source))
+            $repair = Repair-OpenAiOfficialAuthObject $Settings.auth
         }
     }
 
-    $repair = Repair-CodexChatGptAuthMetadata $Settings.auth
     if (-not [bool]$repair.Valid) {
-        throw "OpenAI Official 的 ChatGPT 登录信息不完整，缺少 $($repair.Missing)。请先运行 codex login 或在 cc-switch 中重新保存 OpenAI Official 后再启动。已阻止写入无效 auth.json。"
+        throw "OpenAI Official 的 ChatGPT 登录信息不完整，缺少 $($repair.Missing)，且未在本机 auth.json/backups 中找到可自动恢复的官方登录。请重新完成 codex login。已阻止写入无效 auth.json。"
     }
 
     if ([bool]$repair.Changed) {
         $Settings.auth = $repair.Auth
-        Append-Log '已从 OpenAI id_token 自动补齐 OpenAI Official 的 email/plan_type 登录元数据。'
-        Write-DiagnosticLog 'Repaired OpenAI Official auth metadata from id_token claims.'
+        Append-Log '已自动修正 OpenAI Official 的 ChatGPT 登录元数据。'
+        Write-DiagnosticLog 'Repaired OpenAI Official auth metadata/auth_mode from OAuth token structure.'
     }
     return [pscustomobject]@{ Settings = $Settings; Changed = ($changed -or [bool]$repair.Changed) }
 }
@@ -3456,6 +3557,53 @@ function Update-CcSwitchProviderSettingsConfig {
         if ([string]::IsNullOrWhiteSpace($message)) { $message = "sqlite3 exit code $LASTEXITCODE" }
         throw "更新 cc-switch OpenAI Official 登录/启动配置失败：$message"
     }
+}
+
+function Repair-CcSwitchOfficialProviderRows {
+    param([Parameter(Mandatory)]$Providers)
+
+    if ([string]::IsNullOrWhiteSpace($script:CcSwitchDb) -or -not (Test-Path -LiteralPath $script:CcSwitchDb -PathType Leaf)) {
+        return $Providers
+    }
+
+    $changedIds = New-Object System.Collections.Generic.List[string]
+    foreach ($provider in $Providers) {
+        if (-not (Test-CcSwitchOfficialProvider $provider)) { continue }
+
+        try {
+            $settings = [string]$provider.settings_config | ConvertFrom-Json
+            if (-not $settings) { continue }
+
+            $settingsChanged = $false
+            $authRepair = Repair-CodexProviderSettingsAuth -Provider $provider -Settings $settings
+            $settings = $authRepair.Settings
+            if ([bool]$authRepair.Changed) {
+                $settingsChanged = $true
+            }
+
+            $originalConfig = [string]$settings.config
+            $repairedConfig = Repair-OfficialCodexConfig $originalConfig
+            if ($repairedConfig -ne $originalConfig) {
+                $settings.config = $repairedConfig
+                $settingsChanged = $true
+            }
+
+            if ($settingsChanged) {
+                Update-CcSwitchProviderSettingsConfig -ProviderId ([string]$provider.id) -Settings $settings
+                [void]$changedIds.Add([string]$provider.id)
+            }
+        }
+        catch {
+            Write-DiagnosticLog ("OpenAI Official provider auto-repair skipped id='{0}': {1}" -f ([string]$provider.id), $_.Exception.Message)
+        }
+    }
+
+    if ($changedIds.Count -gt 0) {
+        Append-Log ("已自动修复 cc-switch OpenAI Official 节点：{0}" -f ($changedIds.ToArray() -join ', '))
+        return @(Get-CcSwitchCodexProviders)
+    }
+
+    return $Providers
 }
 
 function Remove-CodexConfigStringValue {
@@ -3542,9 +3690,10 @@ function Assert-CodexLaunchConfigMatchesProvider {
 
     $modelProvider = Normalize-ProviderKey (Get-CodexConfigStringValue $Config 'model_provider')
     $preferredAuth = Normalize-ProviderKey (Get-CodexConfigStringValue $Config 'preferred_auth_method')
-    $authMode = Normalize-ProviderKey ([string]$Auth.auth_mode)
-    $hasApiKey = -not [string]::IsNullOrWhiteSpace([string]$Auth.OPENAI_API_KEY)
-    $hasIdToken = -not [string]::IsNullOrWhiteSpace([string]$Auth.tokens.id_token)
+    $authShape = Get-CodexAuthShape $Auth
+    $authMode = $authShape.AuthMode
+    $hasApiKey = [bool]$authShape.HasApiKey
+    $hasIdToken = [bool]$authShape.HasIdToken
     $providerName = [string]$Provider.name
     $providerId = [string]$Provider.id
     Write-DiagnosticLog ("Launch config summary context='{0}' provider='{1}' id='{2}' model_provider='{3}' preferred_auth_method='{4}' auth_mode='{5}' has_api_key='{6}' has_id_token='{7}'." -f
@@ -3640,9 +3789,10 @@ function Get-CcSwitchProviderAuthShape {
         if ($Provider) {
             $settings = [string]$Provider.settings_config | ConvertFrom-Json
             if ($settings -and $settings.auth) {
-                $authMode = Normalize-ProviderKey ([string]$settings.auth.auth_mode)
-                $hasApiKey = -not [string]::IsNullOrWhiteSpace([string]$settings.auth.OPENAI_API_KEY)
-                $hasIdToken = -not [string]::IsNullOrWhiteSpace([string]$settings.auth.tokens.id_token)
+                $shape = Get-CodexAuthShape $settings.auth
+                $authMode = $shape.AuthMode
+                $hasApiKey = [bool]$shape.HasApiKey
+                $hasIdToken = [bool]$shape.HasIdToken
             }
         }
     }
@@ -4891,6 +5041,9 @@ function Refresh-Providers {
     $oldSuppress = $script:SuppressThreadRefresh
     try {
         $ccSwitchProviders = @(Get-CcSwitchCodexProviders)
+        if (Test-CodexHomeReady) {
+            $ccSwitchProviders = @(Repair-CcSwitchOfficialProviderRows -Providers $ccSwitchProviders)
+        }
         $script:CcSwitchCodexProviders = $ccSwitchProviders
 
         if (-not (Test-CodexHomeReady)) {
