@@ -1,7 +1,8 @@
 ﻿param(
     [string]$CodexHome,
     [string]$CcSwitchHome,
-    [switch]$SelfTest
+    [switch]$SelfTest,
+    [string]$SelfTestSourceProvider
 )
 
 $ErrorActionPreference = 'Stop'
@@ -32,7 +33,7 @@ public static class CodexHistorySyncWindow {
 [System.Windows.Forms.Application]::EnableVisualStyles()
 [System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException)
 
-$script:AppVersion = '2026.06.13.18'
+$script:AppVersion = '2026.06.14.01'
 $script:AppAuthor = 'Joff Pan'
 $script:GitHubRepo = 'zhuofupan/codex-history-sync-portable'
 $script:GitHubUrl = "https://github.com/$script:GitHubRepo"
@@ -50,9 +51,14 @@ $script:SuppressStateSave = $false
 $script:ConfigWatcher = $null
 $script:ConfigReloadTimer = $null
 $script:ConfigReloadInProgress = $false
+$script:ConfigPreferenceSaveInProgress = $false
+$script:IgnoreConfigWatcherUntil = [datetime]::MinValue
+$script:ConfigWatcherLastWriteUtc = [datetime]::MinValue
 $script:DisableCodexAppsOnFast = $true
 $script:GuiInstanceMutex = $null
 $script:HelpForm = $null
+$script:CodexSupportsBypassFullAccess = $null
+$script:DiagnosticSessionId = [guid]::NewGuid().ToString('N')
 
 function Join-OptionalPath {
     param(
@@ -74,6 +80,7 @@ if ([string]::IsNullOrWhiteSpace($script:LastStateDir)) {
     $script:LastStateDir = Join-Path $script:RootDir '.local-state'
 }
 $script:LastStatePath = Join-Path $script:LastStateDir 'last-state.json'
+$script:DiagnosticLogPath = Join-Path $script:LastStateDir 'diagnostic.log'
 
 if (-not $SelfTest) {
     $createdNew = $false
@@ -265,6 +272,11 @@ $script:CcSwitchSettingsPath = if ($script:CcSwitchDb) { Join-Path (Split-Path -
 $script:StateDb = if ($CodexHome) { Join-Path $CodexHome 'state_5.sqlite' } else { $null }
 $script:AllCwdLabel = '全部目录'
 $script:UiLanguage = 'zh-CN'
+$script:WindowWidthByLanguage = @{
+    'zh-CN' = 1320
+    'en-US' = 1320
+}
+$script:RestoringLanguageWindowWidth = $false
 $script:UiStrings = @{
     'zh-CN' = @{
         AllFolders           = '全部目录'
@@ -297,7 +309,7 @@ $script:UiStrings = @{
         ImportCcConfig       = '加载cc-switch.db文件'
         Settings             = '软件配置文件'
         LaunchTerminal       = '从终端启动'
-        LoadCheckedRecord    = '按勾选加载聊天'
+        LoadCheckedRecord    = '启动时加载聊天'
         PowerShellLaunch     = 'PowerShell启动'
         ApprovalNeverLaunch  = '完全访问(-a never)'
         CompletionPopup      = '弹窗提醒'
@@ -314,17 +326,15 @@ $script:UiStrings = @{
         GridRollout          = '记录文件'
         MenuOpenChatDir      = '打开聊天内容'
         MenuOpenWorkspace    = '打开项目目录'
-        MenuCopyCell         = '复制当前单元格'
-        MenuCopyId           = '复制线程 ID'
-        MenuCopyCwd          = '复制项目目录'
-        MenuCopyTitle        = '复制聊天内容'
-        MenuCheckOnly        = '只勾选此记录'
-        MenuCheckExcept      = '除此条外均勾选'
+        MenuCopyCell         = '复制此单元格'
+        MenuCheckOnly        = '只勾选此条'
+        MenuCheckExcept      = '勾选除此所有条'
         MenuLaunchTerminal   = '启动终端'
         MenuLaunchWithChat   = '启动终端（+聊天）'
-        MenuSyncCurrent      = '同步至目标账号（此条）'
-        MenuSyncChecked      = '同步至目标账号（勾选）'
-        MenuSyncAll          = '同步至目标账号（所有）'
+        MenuSyncTo           = '同步此条至'
+        MenuSyncCurrent      = '同步此条至'
+        MenuSyncChecked      = '同步勾选'
+        MenuSyncAll          = '同步全部'
         StatusReady          = '就绪'
     }
     'en-US' = @{
@@ -358,7 +368,7 @@ $script:UiStrings = @{
         ImportCcConfig       = 'Load cc-switch.db'
         Settings             = 'Software Config'
         LaunchTerminal       = 'Launch Terminal'
-        LoadCheckedRecord    = 'Load Checked Chat'
+        LoadCheckedRecord    = 'Load Chat on Launch'
         PowerShellLaunch     = 'PowerShell'
         ApprovalNeverLaunch  = 'Full Access (-a never)'
         CompletionPopup      = 'Popup Alert'
@@ -375,17 +385,15 @@ $script:UiStrings = @{
         GridRollout          = 'Record File'
         MenuOpenChatDir      = 'Open Chat Content'
         MenuOpenWorkspace    = 'Open Project Directory'
-        MenuCopyCell         = 'Copy Cell'
-        MenuCopyId           = 'Copy Thread ID'
-        MenuCopyCwd          = 'Copy Project Directory'
-        MenuCopyTitle        = 'Copy Chat Content'
-        MenuCheckOnly        = 'Only Check This Row'
+        MenuCopyCell         = 'Copy This Cell'
+        MenuCheckOnly        = 'Only Check This'
         MenuCheckExcept      = 'Check All Except This'
         MenuLaunchTerminal   = 'Launch Terminal'
         MenuLaunchWithChat   = 'Launch Terminal (+Chat)'
-        MenuSyncCurrent      = 'Sync to Target (This)'
-        MenuSyncChecked      = 'Sync to Target (Checked)'
-        MenuSyncAll          = 'Sync to Target (All)'
+        MenuSyncTo           = 'Sync This To'
+        MenuSyncCurrent      = 'Sync This To'
+        MenuSyncChecked      = 'Sync Checked'
+        MenuSyncAll          = 'Sync All'
         StatusReady          = 'Ready'
     }
 }
@@ -440,15 +448,26 @@ function Invoke-SqliteJson {
         throw "$Context 数据库不存在：$DatabasePath"
     }
 
-    $output = & $script:Sqlite -json $DatabasePath $Sql 2>&1
-    $exitCode = $LASTEXITCODE
-    $text = ($output | ForEach-Object {
-            if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.ToString() } else { [string]$_ }
-        }) -join [Environment]::NewLine
-    $text = $text.Trim()
+    $text = ''
+    $exitCode = 0
+    for ($attempt = 1; $attempt -le 4; $attempt++) {
+        $output = & $script:Sqlite -cmd '.timeout 5000' -json $DatabasePath $Sql 2>&1
+        $exitCode = $LASTEXITCODE
+        $text = ($output | ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.ToString() } else { [string]$_ }
+            }) -join [Environment]::NewLine
+        $text = $text.Trim()
+
+        if ($exitCode -eq 0) { break }
+        if ($text -notmatch 'database is locked|database is busy|SQLITE_BUSY' -or $attempt -ge 4) { break }
+
+        Write-DiagnosticLog "$Context query hit SQLite busy/locked state; retry $attempt."
+        Start-Sleep -Milliseconds (200 * $attempt)
+    }
 
     if ($exitCode -ne 0) {
         if ([string]::IsNullOrWhiteSpace($text)) { $text = "sqlite3 exit code $exitCode" }
+        Write-DiagnosticLog "$Context query failed exit=$exitCode text=$text"
         throw "$Context 查询失败：$text"
     }
     if ([string]::IsNullOrWhiteSpace($text)) { return @() }
@@ -505,6 +524,12 @@ function Shorten-Text {
 function Get-ProviderLabel {
     param([AllowNull()][string]$Provider)
 
+    $value = ([string]$Provider).Trim()
+    switch ($value.ToLowerInvariant()) {
+        'openai' { return 'OpenAI' }
+        'custom' { return 'API-Any Router' }
+        'rightcode' { return 'API-rightcode' }
+    }
     return $Provider
 }
 
@@ -514,6 +539,18 @@ function Resolve-ProviderValue {
     if ([string]::IsNullOrWhiteSpace($Label)) { return $Label }
     if ($script:ProviderLabelToValue -and $script:ProviderLabelToValue.ContainsKey($Label)) {
         return $script:ProviderLabelToValue.Get_Item($Label)
+    }
+    $normalized = ([string]$Label).Trim().ToLowerInvariant()
+    switch ($normalized) {
+        'openai' { return 'openai' }
+        'openai official' { return 'openai' }
+        'api-any router' { return 'custom' }
+        'api-anyrouter' { return 'custom' }
+        'any router' { return 'custom' }
+        'anyrouter' { return 'custom' }
+        'custom' { return 'custom' }
+        'api-rightcode' { return 'rightcode' }
+        'rightcode' { return 'rightcode' }
     }
     return $Label
 }
@@ -601,18 +638,33 @@ function Get-HistoryProviderFromCcSwitchProvider {
 
     $id = [string]$ProviderRow.id
     $name = [string]$ProviderRow.name
-    if ($id -eq 'codex-official') { return 'openai' }
-    if ($name -eq 'Any Router') { return 'custom' }
+    $normalizedId = Normalize-ProviderKey $id
+    $normalizedName = Normalize-ProviderKey $name
+    if ($normalizedId -eq 'codex-official') { return 'openai' }
+    if ($normalizedName -eq 'any router' -or $normalizedName -eq 'anyrouter') { return 'custom' }
+    if ($normalizedName -match 'right\s*code|rightcode') { return 'rightcode' }
 
     try {
         $settings = [string]$ProviderRow.settings_config | ConvertFrom-Json
         $config = [string]$settings.config
-        $match = [System.Text.RegularExpressions.Regex]::Match(
-            $config,
-            '(?m)^\s*model_provider\s*=\s*["'']([^"'']+)["'']'
-        )
-        if ($match.Success) {
-            return $match.Groups[1].Value.Trim()
+
+        $modelProvider = Get-CodexConfigStringValue $config 'model_provider'
+        if (-not [string]::IsNullOrWhiteSpace($modelProvider)) {
+            $providerName = Get-CodexModelProviderNameFromConfig -Config $config -ProviderId $modelProvider
+            $normalizedProviderName = Normalize-ProviderKey $providerName
+            if ($normalizedProviderName -match 'right\s*code|rightcode') { return 'rightcode' }
+            if ($normalizedProviderName -eq 'any router' -or $normalizedProviderName -eq 'anyrouter') { return 'custom' }
+            if (-not [string]::IsNullOrWhiteSpace($normalizedProviderName) -and $normalizedProviderName -ne 'custom') {
+                return $providerName.Trim()
+            }
+
+            $normalizedModelProvider = Normalize-ProviderKey $modelProvider
+            if ($normalizedModelProvider -ne 'custom') {
+                return $modelProvider.Trim()
+            }
+            if ($normalizedName -eq 'custom') {
+                return 'custom'
+            }
         }
     }
     catch {
@@ -647,18 +699,22 @@ function Reset-ProviderCombo {
     param(
         [Parameter(Mandatory)]$Combo,
         [Parameter(Mandatory)]$Providers,
-        [AllowNull()][string]$PreferredProvider
+        [AllowNull()][string]$PreferredProvider,
+        [AllowNull()][string]$ExcludedProvider
     )
 
     if (-not $Combo) { return }
 
     $current = Resolve-ProviderValue ([string]$Combo.SelectedItem)
-    if ([string]::IsNullOrWhiteSpace($current)) {
+    if ([string]::IsNullOrWhiteSpace($current) -or (Test-SameHistoryProvider $current $ExcludedProvider)) {
         $current = $PreferredProvider
     }
+    if (Test-SameHistoryProvider $current $ExcludedProvider) { $current = '' }
+    if (Test-SameHistoryProvider $PreferredProvider $ExcludedProvider) { $PreferredProvider = '' }
 
     $Combo.Items.Clear()
     foreach ($provider in $Providers) {
+        if (Test-SameHistoryProvider $provider $ExcludedProvider) { continue }
         [void]$Combo.Items.Add((Get-ProviderLabel $provider))
     }
 
@@ -673,8 +729,46 @@ function Reset-ProviderCombo {
     }
 }
 
+function Test-SameHistoryProvider {
+    param(
+        [AllowNull()][string]$A,
+        [AllowNull()][string]$B
+    )
+
+    if ([string]::IsNullOrWhiteSpace($A) -or [string]::IsNullOrWhiteSpace($B)) { return $false }
+    $left = Resolve-ProviderValue $A
+    $right = Resolve-ProviderValue $B
+    return [string]::Equals($left, $right, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Assert-HistoryTargetProviderAllowed {
+    param(
+        [Parameter(Mandatory)][string]$SourceProvider,
+        [Parameter(Mandatory)][string]$TargetProvider
+    )
+
+    if (Test-SameHistoryProvider $SourceProvider $TargetProvider) {
+        throw "源账号与目标账号不能相同：$SourceProvider。请选择另一个目标账号。"
+    }
+}
+
+function Update-TargetProviderComboForCurrentSource {
+    param([AllowNull()][string]$PreferredProvider)
+
+    if (-not $script:TargetCombo) { return }
+    $providers = @(Get-Providers)
+    $source = Resolve-ProviderValue ([string]$script:SourceCombo.SelectedItem)
+    if ([string]::IsNullOrWhiteSpace($PreferredProvider)) {
+        $PreferredProvider = Resolve-ProviderValue ([string]$script:TargetCombo.SelectedItem)
+    }
+    Reset-ProviderCombo $script:TargetCombo $providers $PreferredProvider -ExcludedProvider $source
+}
+
 function Reset-CcSwitchAccountCombo {
-    param([Parameter(Mandatory)]$Providers)
+    param(
+        [Parameter(Mandatory)]$Providers,
+        [AllowNull()][string]$HistoryProvider
+    )
 
     if (-not $script:CodexProviderCombo) { return }
 
@@ -683,8 +777,13 @@ function Reset-CcSwitchAccountCombo {
     $script:CcSwitchProviderLabelToId = @{}
     $usedLabels = @{}
     $preferred = $null
+    $shownLabels = New-Object System.Collections.Generic.List[string]
 
     foreach ($provider in $Providers) {
+        if (-not (Test-CcSwitchProviderAllowedForHistoryProvider -ProviderRow $provider -HistoryProvider $HistoryProvider)) {
+            continue
+        }
+
         $id = [string]$provider.id
         if ([string]::IsNullOrWhiteSpace($id)) { continue }
 
@@ -697,14 +796,25 @@ function Reset-CcSwitchAccountCombo {
         $usedLabels[$label] = $true
         $script:CcSwitchProviderLabelToId[$label] = $id
         [void]$script:CodexProviderCombo.Items.Add($label)
+        [void]$shownLabels.Add($label)
 
         if ([string]::IsNullOrWhiteSpace($preferred) -and [bool]$provider.is_current) {
             $preferred = $id
         }
     }
 
-    if ([string]::IsNullOrWhiteSpace($preferred)) { $preferred = 'codex-official' }
-    if (-not [string]::IsNullOrWhiteSpace($current)) { $preferred = $current }
+    $history = Normalize-ProviderKey $HistoryProvider
+    if ([string]::IsNullOrWhiteSpace($preferred) -and $history -eq 'openai') {
+        $preferred = 'codex-official'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($current)) {
+        foreach ($label in $script:CodexProviderCombo.Items) {
+            if ($script:CcSwitchProviderLabelToId[$label] -eq $current) {
+                $preferred = $current
+                break
+            }
+        }
+    }
 
     foreach ($label in $script:CodexProviderCombo.Items) {
         if ($script:CcSwitchProviderLabelToId[$label] -eq $preferred) {
@@ -714,6 +824,33 @@ function Reset-CcSwitchAccountCombo {
     }
     if (-not $script:CodexProviderCombo.SelectedItem -and $script:CodexProviderCombo.Items.Count -gt 0) {
         $script:CodexProviderCombo.SelectedIndex = 0
+    }
+
+    Write-DiagnosticLog ("CcSwitch combo reset history='{0}' selected='{1}' items=[{2}]" -f $HistoryProvider, ([string]$script:CodexProviderCombo.SelectedItem), ($shownLabels.ToArray() -join ', '))
+}
+
+function Get-CurrentSourceProvider {
+    if (-not $script:SourceCombo) { return '' }
+    return Resolve-ProviderValue ([string]$script:SourceCombo.SelectedItem)
+}
+
+function Update-CcSwitchAccountComboForCurrentSource {
+    $providers = @()
+    if ($null -ne $script:CcSwitchCodexProviders) {
+        $providers = @($script:CcSwitchCodexProviders)
+    }
+    else {
+        $providers = @(Get-CcSwitchCodexProviders)
+        $script:CcSwitchCodexProviders = $providers
+    }
+
+    $oldSuppress = $script:SuppressThreadRefresh
+    try {
+        $script:SuppressThreadRefresh = $true
+        Reset-CcSwitchAccountCombo -Providers $providers -HistoryProvider (Get-CurrentSourceProvider)
+    }
+    finally {
+        $script:SuppressThreadRefresh = $oldSuppress
     }
 }
 
@@ -942,11 +1079,81 @@ function Get-LanguageToggleText {
 }
 
 function Toggle-UiLanguage {
+    Remember-CurrentLanguageWindowWidth
     if ($script:UiLanguage -eq 'en-US') {
-        Set-UiLanguage 'zh-CN'
+        Set-UiLanguage 'zh-CN' -RestoreWindowWidth
     }
     else {
-        Set-UiLanguage 'en-US'
+        Set-UiLanguage 'en-US' -RestoreWindowWidth
+    }
+}
+
+function Get-LanguageWindowWidth {
+    param([Parameter(Mandatory)][string]$Language)
+
+    $language = Normalize-UiLanguage $Language
+    $value = $script:WindowWidthByLanguage[$language]
+    if ($null -eq $value -or [int]$value -lt 1) { return 1320 }
+    return [int]$value
+}
+
+function Set-LanguageWindowWidth {
+    param(
+        [Parameter(Mandatory)][string]$Language,
+        [int]$Width
+    )
+
+    $language = Normalize-UiLanguage $Language
+    if ($Width -lt 1) { return }
+    $script:WindowWidthByLanguage[$language] = [int]$Width
+}
+
+function Remember-CurrentLanguageWindowWidth {
+    if (-not $script:Form -or $script:Form.IsDisposed -or $script:RestoringLanguageWindowWidth) { return }
+    Set-LanguageWindowWidth -Language $script:UiLanguage -Width $script:Form.Width
+}
+
+function Import-LanguageWindowWidths {
+    param([AllowNull()]$Value)
+
+    if ($null -eq $Value) { return }
+    foreach ($language in @('zh-CN', 'en-US')) {
+        $property = $Value.PSObject.Properties[$language]
+        if ($property -and $null -ne $property.Value) {
+            try {
+                Set-LanguageWindowWidth -Language $language -Width ([int]$property.Value)
+            }
+            catch {
+                continue
+            }
+        }
+    }
+}
+
+function Get-LanguageWindowWidthsForConfig {
+    Remember-CurrentLanguageWindowWidth
+    return [pscustomobject][ordered]@{
+        'zh-CN' = Get-LanguageWindowWidth 'zh-CN'
+        'en-US' = Get-LanguageWindowWidth 'en-US'
+    }
+}
+
+function Apply-LanguageWindowWidth {
+    param([Parameter(Mandatory)][string]$Language)
+
+    if (-not $script:Form -or $script:Form.IsDisposed) { return }
+
+    $language = Normalize-UiLanguage $Language
+    $targetWidth = [Math]::Max((Get-LanguageWindowWidth $language), $script:Form.MinimumSize.Width)
+    $script:RestoringLanguageWindowWidth = $true
+    try {
+        if ($script:Form.Width -ne $targetWidth) {
+            $script:Form.Width = $targetWidth
+        }
+        Set-LanguageWindowWidth -Language $language -Width $script:Form.Width
+    }
+    finally {
+        $script:RestoringLanguageWindowWidth = $false
     }
 }
 
@@ -1197,14 +1404,11 @@ function Apply-UiLanguage {
     Set-ControlText $gridOpenRecordDirItem 'MenuOpenChatDir'
     Set-ControlText $gridOpenWorkspaceItem 'MenuOpenWorkspace'
     Set-ControlText $gridCopyCellItem 'MenuCopyCell'
-    Set-ControlText $gridCopyIdItem 'MenuCopyId'
-    Set-ControlText $gridCopyCwdItem 'MenuCopyCwd'
-    Set-ControlText $gridCopyTitleItem 'MenuCopyTitle'
     Set-ControlText $gridCheckOnlyItem 'MenuCheckOnly'
     Set-ControlText $gridCheckExceptItem 'MenuCheckExcept'
     Set-ControlText $gridLaunchTerminalItem 'MenuLaunchTerminal'
     Set-ControlText $gridLaunchWithChatItem 'MenuLaunchWithChat'
-    Set-ControlText $gridCloneCurrentItem 'MenuSyncCurrent'
+    Set-ControlText $script:GridSyncToMenuItem 'MenuSyncTo'
     Set-ControlText $gridCloneCheckedItem 'MenuSyncChecked'
     Set-ControlText $gridSyncAllItem 'MenuSyncAll'
 
@@ -1217,14 +1421,30 @@ function Apply-UiLanguage {
 }
 
 function Set-UiLanguage {
-    param([AllowNull()][string]$Language)
+    param(
+        [AllowNull()][string]$Language,
+        [switch]$RestoreWindowWidth
+    )
 
     $normalized = Normalize-UiLanguage $Language
     if ($script:UiLanguage -eq $normalized -and $script:Form) {
+        if ($RestoreWindowWidth) {
+            Apply-LanguageWindowWidth $normalized
+        }
         return
     }
+    $oldRestoring = $script:RestoringLanguageWindowWidth
+    if ($RestoreWindowWidth) { $script:RestoringLanguageWindowWidth = $true }
     $script:UiLanguage = $normalized
-    Apply-UiLanguage
+    try {
+        Apply-UiLanguage
+    }
+    finally {
+        $script:RestoringLanguageWindowWidth = $oldRestoring
+    }
+    if ($RestoreWindowWidth) {
+        Apply-LanguageWindowWidth $normalized
+    }
 }
 
 function New-HeaderImage {
@@ -1363,10 +1583,52 @@ function Copy-TextToClipboard {
     }
 }
 
+function Write-DiagnosticLog {
+    param([AllowNull()][string]$Text)
+
+    try {
+        if ([string]::IsNullOrWhiteSpace($script:DiagnosticLogPath)) { return }
+        $dir = Split-Path -Parent $script:DiagnosticLogPath
+        if (-not [string]::IsNullOrWhiteSpace($dir) -and -not (Test-Path -LiteralPath $dir -PathType Container)) {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        }
+        $line = '[{0}] [{1}] {2}{3}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff zzz'), $script:DiagnosticSessionId, ([string]$Text), [Environment]::NewLine
+        [System.IO.File]::AppendAllText($script:DiagnosticLogPath, $line, $script:Utf8NoBom)
+    }
+    catch {
+        return
+    }
+}
+
+function Format-DiagnosticError {
+    param([AllowNull()]$ErrorObject)
+
+    if ($null -eq $ErrorObject) { return 'unknown error' }
+    if ($ErrorObject -is [System.Management.Automation.ErrorRecord]) {
+        $line = $ErrorObject.InvocationInfo.ScriptLineNumber
+        $message = $ErrorObject.Exception.Message
+        if ($line) { $message = "line=$line $message" }
+        return "$message stack=$($ErrorObject.ScriptStackTrace)"
+    }
+    if ($ErrorObject -is [Exception]) {
+        return "$($ErrorObject.GetType().FullName): $($ErrorObject.Message) stack=$($ErrorObject.StackTrace)"
+    }
+    return [string]$ErrorObject
+}
+
 function Append-Log {
-    param([string]$Text)
-    $script:OutputBox.AppendText(("> " + (Get-Date -Format 'HH:mm:ss') + [Environment]::NewLine))
-    $script:OutputBox.AppendText($Text.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine)
+    param([AllowNull()][string]$Text)
+
+    $message = if ($null -eq $Text) { '' } else { [string]$Text }
+    Write-DiagnosticLog $message
+    try {
+        if (-not $script:OutputBox -or $script:OutputBox.IsDisposed) { return }
+        $script:OutputBox.AppendText(("> " + (Get-Date -Format 'HH:mm:ss') + [Environment]::NewLine))
+        $script:OutputBox.AppendText($message.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine)
+    }
+    catch {
+        Write-DiagnosticLog ("Append-Log UI write failed: " + (Format-DiagnosticError $_))
+    }
 }
 
 function Show-GuiError {
@@ -1377,6 +1639,7 @@ function Show-GuiError {
     if ($line) {
         $message = "第 $line 行：$message"
     }
+    Write-DiagnosticLog ("Show-GuiError: " + (Format-DiagnosticError $ErrorRecord))
     Append-Log $message
     if ($SelfTest) {
         throw $message
@@ -1388,6 +1651,7 @@ function Show-UnhandledGuiException {
     param([AllowNull()][Exception]$Exception)
 
     $message = if ($Exception) { $Exception.Message } else { '未知界面异常' }
+    Write-DiagnosticLog ("Unhandled GUI exception: " + (Format-DiagnosticError $Exception))
     try {
         if ($script:OutputBox -and -not $script:OutputBox.IsDisposed) {
             Append-Log "已拦截界面异常，程序会继续运行：$message"
@@ -1476,14 +1740,13 @@ $(Get-CcSwitchHomeHelpText)
 - 配置文件只写本机路径和默认选择，不要写 API key、token 或 auth.json 内容。
 
 【从终端启动】
-- 不勾选记录：在当前目录创建新对话。
-- 勾选【按勾选加载聊天】且只勾选一条记录：自动执行等价于 codex resume <线程 ID> 的恢复。
-- 取消【按勾选加载聊天】：忽略列表最左侧勾选，在当前目录创建新对话。
-- 勾选多条记录：会提示只保留一条。
+- 勾选【启动时加载聊天】：自动恢复当前选中的聊天。
+- 取消【启动时加载聊天】：在当前目录创建新对话。
+- 列表最左侧的勾选列只用于同步勾选记录，不再决定启动时是否加载聊天。
 - 勾选【PowerShell启动】时优先用 PowerShell，否则优先用 CMD；找不到所选终端时会自动退回另一种。
 
 【更新】
-- 点击【检查更新】会从 GitHub main 分支检查版本；发现新版后可以一键下载并覆盖当前程序文件。
+- 点击【检查更新】会从 GitHub main 分支检查版本；如果当前目录是干净的 Git checkout，会自动 git pull 同步 GitHub，否则继续使用 ZIP 热更新。
 - 本机 codex-history-sync-config.json、数据库、auth.json、config.toml 不会被更新覆盖。
 "@
 }
@@ -1604,16 +1867,17 @@ function Show-AppHelp {
     Add-HelpRichLine -Box $box -Text ''
 
     Add-HelpRichLine -Box $box -Text '从终端启动' -Font $sectionFont -Color $blue
-    Add-HelpRichLine -Box $box -Text '- 不勾选记录：在当前目录创建新对话。' -Font $bodyFont -Color $slate
-    Add-HelpRichLine -Box $box -Text '- 勾选【按勾选加载聊天】且只勾选一条记录：自动执行 codex resume <线程 ID>。' -Font $bodyFont -Color $slate
-    Add-HelpRichLine -Box $box -Text '- 勾选多条记录：会提示只保留一条。' -Font $bodyFont -Color $slate
+    Add-HelpRichLine -Box $box -Text '- 勾选【启动时加载聊天】：自动恢复当前选中的聊天。' -Font $bodyFont -Color $slate
+    Add-HelpRichLine -Box $box -Text '- 取消【启动时加载聊天】：在当前目录创建新对话。' -Font $bodyFont -Color $slate
+    Add-HelpRichLine -Box $box -Text '- 列表最左侧的勾选列只用于同步勾选记录，不再决定启动时是否加载聊天。' -Font $bodyFont -Color $slate
     Add-HelpRichLine -Box $box -Text '- 勾选【PowerShell启动】时优先用 PowerShell；取消勾选时优先用 CMD。' -Font $bodyFont -Color $slate
-    Add-HelpRichLine -Box $box -Text '- 勾选【完全访问(-a never)】时启动命令会追加 -a never。' -Font $bodyFont -Color $slate
+    Add-HelpRichLine -Box $box -Text '- 勾选【完全访问(-a never)】时启动命令会追加 Codex 官方 bypass 参数，跳过审批并关闭沙箱。' -Font $bodyFont -Color $slate
+    Add-HelpRichLine -Box $box -Text '- 如果检测到权限审批请求等待超过 10 秒，会弹出橙色提醒。' -Font $bodyFont -Color $slate
     Add-HelpRichLine -Box $box -Text ''
 
     Add-HelpRichLine -Box $box -Text '配置与更新' -Font $sectionFont -Color $blue
-    Add-HelpRichLine -Box $box -Text '- 点击【软件配置文件】会打开 codex-history-sync-config.json；保存后软件自动刷新。' -Font $bodyFont -Color $slate
-    Add-HelpRichLine -Box $box -Text '- 点击【检查更新】会从 GitHub main 分支检查新版并支持热更新。' -Font $bodyFont -Color $slate
+    Add-HelpRichLine -Box $box -Text '- 点击【软件配置文件】会打开 codex-history-sync-config.json；保存后软件自动刷新；界面偏好也会自动写回配置文件。' -Font $bodyFont -Color $slate
+    Add-HelpRichLine -Box $box -Text '- 点击【检查更新】会从 GitHub main 分支检查新版；干净的 Git checkout 会自动 git pull，否则使用 ZIP 热更新。' -Font $bodyFont -Color $slate
     Add-HelpRichLine -Box $box -Text '不要把 API key、token、auth.json、config.toml 或 state_5.sqlite 内容写进配置文件。' -Font $strongFont -Color $red -BackColor $warningBack
 
     $box.SelectionStart = 0
@@ -1627,7 +1891,11 @@ function Show-AppHelp {
 }
 
 function Set-CodexHomeFromSelection {
-    param([Parameter(Mandatory)][string]$SelectedPath)
+    param(
+        [Parameter(Mandatory)][string]$SelectedPath,
+        [switch]$SkipConfigSync,
+        [switch]$SkipRefresh
+    )
 
     $resolved = Resolve-CodexHomeFromSelection $SelectedPath
     if ([string]::IsNullOrWhiteSpace($resolved)) {
@@ -1639,12 +1907,16 @@ function Set-CodexHomeFromSelection {
     $script:CodexHomeResolveError = $null
 
     Append-Log "已加载 Codex 账号目录：$script:CodexHome"
-    Refresh-Providers
-    Refresh-CwdOptions
-    Refresh-Threads
-    Save-AppState
-    Sync-AppConfigFileWithDetectedInfo -CreateIfMissing
-    if ($script:TurnEndedNotifyBox -and [bool]$script:TurnEndedNotifyBox.Checked) {
+    if (-not $SkipRefresh) {
+        Refresh-Providers
+        Refresh-CwdOptions
+        Refresh-Threads
+    }
+    if (-not $SkipConfigSync) {
+        Save-AppState
+        Sync-AppConfigFileWithDetectedInfo -CreateIfMissing
+    }
+    if ((-not $SkipRefresh) -and $script:TurnEndedNotifyBox -and [bool]$script:TurnEndedNotifyBox.Checked) {
         try {
             Start-TurnCompleteMonitor
         }
@@ -1690,8 +1962,8 @@ function Set-CcSwitchHomeFromSelection {
         Append-Log '所选数据库可读取，但暂未发现 app_type=codex 的 cc-switch 供应商。请先在 cc-switch 中新增并保存 Codex 节点。'
     }
     Refresh-Providers
-    Save-AppState
     if (-not $SkipConfigSync) {
+        Save-AppState
         try {
             Sync-AppConfigFileWithDetectedInfo -CreateIfMissing -ForceCurrentCcSwitchHome
         }
@@ -1827,7 +2099,7 @@ function Select-CcSwitchProviderFromConfig {
         }
     }
 
-    throw "配置项 defaultCcSwitchNode 未匹配到 cc-switch 节点：$Value。请确认 ccSwitchHome 指向包含 cc-switch.db 的目录。"
+    Append-Log "配置项 defaultCcSwitchNode 未匹配到当前源账号可用的 cc-switch 节点，已保留自动选择结果：$Value"
 }
 
 function Select-CwdFilterFromConfig {
@@ -1861,15 +2133,28 @@ function Get-CurrentAppState {
         disableAppsOnFast      = [bool]$script:DisableCodexAppsOnFast
         turnCompletePopup      = if ($script:TurnEndedNotifyBox) { [bool]$script:TurnEndedNotifyBox.Checked } else { $true }
         usePowerShellTerminal  = if ($script:UsePowerShellLaunchBox) { [bool]$script:UsePowerShellLaunchBox.Checked } else { $false }
-        approvalNeverOnLaunch  = if ($script:ApprovalNeverLaunchBox) { [bool]$script:ApprovalNeverLaunchBox.Checked } else { $false }
-        loadCheckedRecordOnLaunch = if ($script:LoadCheckedRecordBox) { [bool]$script:LoadCheckedRecordBox.Checked } else { $true }
+        approvalNeverOnLaunch  = if ($script:ApprovalNeverLaunchBox) { [bool]$script:ApprovalNeverLaunchBox.Checked } else { $true }
+        loadChatOnLaunch      = if ($script:LoadCheckedRecordBox) { [bool]$script:LoadCheckedRecordBox.Checked } else { $true }
         uiLanguage             = [string]$script:UiLanguage
+        windowWidth            = if ($script:Form) { [int]$script:Form.Width } else { 1320 }
+        windowWidthByLanguage  = Get-LanguageWindowWidthsForConfig
     }
 }
 
 function Save-AppState {
     if ($script:SuppressStateSave) { return }
+    if ($SelfTest) {
+        Write-DiagnosticLog 'Save-AppState skipped in SelfTest.'
+        return
+    }
     if (-not $script:Form) { return }
+
+    Write-DiagnosticLog ("Save-AppState start reload={0} prefSave={1} source='{2}' target='{3}' cc='{4}'" -f
+        $script:ConfigReloadInProgress,
+        $script:ConfigPreferenceSaveInProgress,
+        (Resolve-ProviderValue ([string]$script:SourceCombo.SelectedItem)),
+        (Resolve-ProviderValue ([string]$script:TargetCombo.SelectedItem)),
+        ([string]$script:CodexProviderCombo.SelectedItem))
 
     try {
         if (-not (Test-Path -LiteralPath $script:LastStateDir -PathType Container)) {
@@ -1881,6 +2166,15 @@ function Save-AppState {
     catch {
         if ($script:OutputBox) {
             Append-Log "保存上次配置失败：$($_.Exception.Message)"
+        }
+    }
+
+    try {
+        Save-AppPreferencesToConfigFile -CreateIfMissing
+    }
+    catch {
+        if ($script:OutputBox) {
+            Append-Log "保存软件配置文件失败：$($_.Exception.Message)"
         }
     }
 }
@@ -1929,11 +2223,17 @@ function Import-AppConfig {
             $script:ApprovalNeverLaunchBox.Checked = Get-ConfigBoolValue -Config $config -Names @('approvalNeverOnLaunch', 'fullAccessOnLaunch', 'approvalModeNeverOnLaunch') -Default ([bool]$script:ApprovalNeverLaunchBox.Checked)
         }
         if ($script:LoadCheckedRecordBox) {
-            $script:LoadCheckedRecordBox.Checked = Get-ConfigBoolValue -Config $config -Names @('loadCheckedRecordOnLaunch', 'resumeCheckedRecordOnLaunch', 'loadSelectedRecordOnLaunch') -Default ([bool]$script:LoadCheckedRecordBox.Checked)
+            $script:LoadCheckedRecordBox.Checked = Get-ConfigBoolValue -Config $config -Names @('loadChatOnLaunch', 'loadCheckedRecordOnLaunch', 'resumeCheckedRecordOnLaunch', 'loadSelectedRecordOnLaunch') -Default ([bool]$script:LoadCheckedRecordBox.Checked)
         }
+        Import-LanguageWindowWidths (Get-ConfigPropertyValue -Config $config -Names @('windowWidthByLanguage', 'windowWidthsByLanguage'))
+        $windowWidth = Get-ConfigIntValue -Config $config -Names @('windowWidth') -Default 0
+        if ($windowWidth -gt 0) {
+            Set-LanguageWindowWidth -Language $script:UiLanguage -Width $windowWidth
+        }
+
         $language = Get-ConfigStringValue -Config $config -Names @('uiLanguage', 'language')
         if (-not [string]::IsNullOrWhiteSpace($language)) {
-            Set-UiLanguage $language
+            Set-UiLanguage $language -RestoreWindowWidth
         }
         if ($script:LimitBox) {
             $limit = Get-ConfigIntValue -Config $config -Names @('limit', 'displayLimit') -Default ([int]$script:LimitBox.Value)
@@ -1942,7 +2242,7 @@ function Import-AppConfig {
 
         Set-ConfiguredCodexExecutable $codexExeValue
         if (-not [string]::IsNullOrWhiteSpace($codexHomeValue)) {
-            Set-CodexHomeFromSelection $codexHomeValue
+            Set-CodexHomeFromSelection -SelectedPath $codexHomeValue -SkipConfigSync -SkipRefresh
         }
         if (-not [string]::IsNullOrWhiteSpace($ccSwitchHomeValue)) {
             Set-CcSwitchHomeFromSelection -SelectedPath $ccSwitchHomeValue -SkipConfigSync
@@ -1952,7 +2252,8 @@ function Import-AppConfig {
         $source = Get-ConfigStringValue -Config $config -Names @('defaultSourceProvider', 'sourceProvider')
         $target = Get-ConfigStringValue -Config $config -Names @('defaultTargetProvider', 'targetProvider')
         if (-not [string]::IsNullOrWhiteSpace($source)) { Select-Provider $script:SourceCombo $source }
-        if (-not [string]::IsNullOrWhiteSpace($target)) { Select-Provider $script:TargetCombo $target }
+        Update-TargetProviderComboForCurrentSource -PreferredProvider $target
+        Update-CcSwitchAccountComboForCurrentSource
 
         $ccNode = Get-ConfigStringValue -Config $config -Names @('defaultCcSwitchNode', 'ccSwitchNode')
         Select-CcSwitchProviderFromConfig $ccNode
@@ -2066,14 +2367,17 @@ function New-AppConfigObject {
             defaultTargetProvider     = '同步目标 model_provider 桶。'
             defaultCcSwitchNode       = '从终端启动时使用的 cc-switch Codex 节点名字或 id。可参考 knownCcSwitchNodes。'
             usePowerShellTerminal     = 'true 表示从终端启动时优先用 PowerShell；false 表示优先用 CMD。'
-            approvalNeverOnLaunch     = 'true 表示从终端启动 Codex 时追加 -a never，也就是 approval mode never。'
-            loadCheckedRecordOnLaunch = 'true 表示从终端启动时，如果【按勾选加载聊天】已开启且列表最左侧只勾选了一条记录，就自动恢复该对话；false 表示忽略勾选并在目录下新建对话。'
+            approvalNeverOnLaunch     = 'true 表示从终端启动 Codex 时追加 --dangerously-bypass-approvals-and-sandbox，跳过审批并关闭沙箱。'
+            loadChatOnLaunch          = 'true 表示从终端启动时，如果【启动时加载聊天】已开启，就自动恢复当前选中的聊天；false 表示在当前目录下新建对话。'
+            lastSavedAt               = '软件最后一次自动保存界面偏好的时间。'
             uiLanguage                = '界面语言。zh-CN 表示中文，en-US 表示英文。'
+            windowWidthByLanguage     = '分别记录中文和英文界面下的窗口宽度，避免切换语言时互相覆盖。'
             knownCodexHistoryProviders = '软件自动检测到的历史记录账号列表，只作参考。'
             knownCcSwitchNodes        = '软件自动检测到的 cc-switch Codex 节点列表，只作参考。'
             security                  = '不要在这里写 API key、token、auth.json、config.toml 或 state_5.sqlite 内容。'
         }
         version                    = $script:AppVersion
+        lastSavedAt                = [string]$state.savedAt
         codexHome                  = $codexHomeValue
         ccSwitchHome               = $ccSwitchHomeValue
         codexExe                   = Get-CodexExecutableForConfig
@@ -2087,8 +2391,9 @@ function New-AppConfigObject {
         turnCompletePopup          = [bool]$state.turnCompletePopup
         usePowerShellTerminal      = [bool]$state.usePowerShellTerminal
         approvalNeverOnLaunch      = [bool]$state.approvalNeverOnLaunch
-        loadCheckedRecordOnLaunch  = [bool]$state.loadCheckedRecordOnLaunch
+        loadChatOnLaunch           = [bool]$state.loadChatOnLaunch
         uiLanguage                 = [string]$state.uiLanguage
+        windowWidthByLanguage      = $state.windowWidthByLanguage
         knownCodexHistoryProviders = @(Get-DetectedCodexHistoryProvidersForConfig)
         knownCcSwitchNodes         = @(Get-DetectedCcSwitchNodesForConfig)
     }
@@ -2104,8 +2409,83 @@ function Write-AppConfigObject {
     }
     if ($current -eq $json) { return $false }
 
+    $script:IgnoreConfigWatcherUntil = (Get-Date).AddSeconds(2)
+    Write-DiagnosticLog "Writing app config; suppressing config watcher until $($script:IgnoreConfigWatcherUntil.ToString('o'))."
     [System.IO.File]::WriteAllText($script:AutoConfigPath, $json, $script:Utf8NoBom)
     return $true
+}
+
+function Save-AppPreferencesToConfigFile {
+    param([switch]$CreateIfMissing)
+
+    if ($script:ConfigReloadInProgress -or $script:ConfigPreferenceSaveInProgress) {
+        Write-DiagnosticLog "Save-AppPreferencesToConfigFile skipped reload=$script:ConfigReloadInProgress prefSave=$script:ConfigPreferenceSaveInProgress."
+        return
+    }
+    if (-not (Test-Path -LiteralPath $script:AutoConfigPath -PathType Leaf) -and -not $CreateIfMissing) {
+        Write-DiagnosticLog 'Save-AppPreferencesToConfigFile skipped because config file does not exist.'
+        return
+    }
+
+    $script:ConfigPreferenceSaveInProgress = $true
+    try {
+        Write-DiagnosticLog 'Save-AppPreferencesToConfigFile start.'
+        $config = $null
+        if (Test-Path -LiteralPath $script:AutoConfigPath -PathType Leaf) {
+            try {
+                $config = Get-Content -LiteralPath $script:AutoConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            }
+            catch {
+                if ($script:OutputBox) {
+                    Append-Log "读取现有配置失败，将用当前界面状态重新生成配置文件：$($_.Exception.Message)"
+                }
+            }
+        }
+        if (-not $config) {
+            $config = New-AppConfigObject
+        }
+
+        $state = Get-CurrentAppState
+        $preferenceValues = [ordered]@{
+            version                   = $script:AppVersion
+            lastSavedAt               = [string]$state.savedAt
+            codexHome                 = [string]$state.codexHome
+            ccSwitchHome              = [string]$state.ccSwitchHome
+            codexExe                  = Get-CodexExecutableForConfig
+            defaultSourceProvider     = [string]$state.defaultSourceProvider
+            defaultTargetProvider     = [string]$state.defaultTargetProvider
+            defaultCcSwitchNode       = [string]$state.defaultCcSwitchNode
+            directoryFilter           = [string]$state.directoryFilter
+            limit                     = [int]$state.limit
+            includeArchived           = [bool]$state.includeArchived
+            disableAppsOnFast         = [bool]$state.disableAppsOnFast
+            turnCompletePopup         = [bool]$state.turnCompletePopup
+            usePowerShellTerminal     = [bool]$state.usePowerShellTerminal
+            approvalNeverOnLaunch     = [bool]$state.approvalNeverOnLaunch
+            loadChatOnLaunch          = [bool]$state.loadChatOnLaunch
+            uiLanguage                = [string]$state.uiLanguage
+            windowWidthByLanguage     = $state.windowWidthByLanguage
+        }
+
+        foreach ($entry in $preferenceValues.GetEnumerator()) {
+            Set-ObjectProperty -Object $config -Name $entry.Key -Value $entry.Value
+        }
+        if ($config.PSObject.Properties['loadCheckedRecordOnLaunch']) {
+            $config.PSObject.Properties.Remove('loadCheckedRecordOnLaunch')
+        }
+        if ($config.PSObject.Properties['_help'] -and $config._help) {
+            Set-ObjectProperty -Object $config._help -Name 'loadChatOnLaunch' -Value 'true 表示从终端启动时，如果【启动时加载聊天】已开启，就自动恢复当前选中的聊天；false 表示在当前目录下新建对话。'
+            if ($config._help.PSObject.Properties['loadCheckedRecordOnLaunch']) {
+                $config._help.PSObject.Properties.Remove('loadCheckedRecordOnLaunch')
+            }
+        }
+
+        $changed = Write-AppConfigObject $config
+        Write-DiagnosticLog "Save-AppPreferencesToConfigFile done changed=$changed."
+    }
+    finally {
+        $script:ConfigPreferenceSaveInProgress = $false
+    }
 }
 
 function Sync-AppConfigFileWithDetectedInfo {
@@ -2136,8 +2516,9 @@ function Sync-AppConfigFileWithDetectedInfo {
                     'turnCompletePopup',
                     'usePowerShellTerminal',
                     'approvalNeverOnLaunch',
-                    'loadCheckedRecordOnLaunch',
-                    'uiLanguage'
+                    'loadChatOnLaunch',
+                    'uiLanguage',
+                    'windowWidthByLanguage'
                 )) {
                 if ($ForceCurrentCcSwitchHome -and $name -eq 'ccSwitchHome') { continue }
                 $value = Get-ConfigPropertyValue -Config $existing -Names @($name)
@@ -2169,6 +2550,10 @@ function Open-AppConfigFile {
 function Start-AppConfigWatcher {
     if ($script:ConfigWatcher) { return }
 
+    if (Test-Path -LiteralPath $script:AutoConfigPath -PathType Leaf) {
+        $script:ConfigWatcherLastWriteUtc = (Get-Item -LiteralPath $script:AutoConfigPath).LastWriteTimeUtc
+    }
+
     $script:ConfigReloadTimer = New-Object System.Windows.Forms.Timer
     $script:ConfigReloadTimer.Interval = 700
     $script:ConfigReloadTimer.Add_Tick({
@@ -2178,35 +2563,44 @@ function Start-AppConfigWatcher {
 
             $script:ConfigReloadInProgress = $true
             try {
+                Write-DiagnosticLog 'Config reload timer importing app config.'
                 Import-AppConfig -Path $script:AutoConfigPath -Silent
                 Append-Log '检测到配置文件保存，已自动刷新配置。'
             }
             catch {
+                Write-DiagnosticLog ("Config reload failed: " + (Format-DiagnosticError $_))
                 Append-Log "自动刷新配置失败：$($_.Exception.Message)"
             }
             finally {
+                Write-DiagnosticLog 'Config reload timer finished.'
                 $script:ConfigReloadInProgress = $false
             }
         })
 
-    $script:ConfigWatcher = New-Object System.IO.FileSystemWatcher
-    $script:ConfigWatcher.Path = $script:RootDir
-    $script:ConfigWatcher.Filter = 'codex-history-sync-config.json'
-    $script:ConfigWatcher.NotifyFilter = [System.IO.NotifyFilters]'FileName, LastWrite, Size'
-    $onConfigChanged = {
-        if ($script:Form -and -not $script:Form.IsDisposed) {
-            [void]$script:Form.BeginInvoke([Action]{
-                    if ($script:ConfigReloadTimer) {
-                        $script:ConfigReloadTimer.Stop()
-                        $script:ConfigReloadTimer.Start()
-                    }
-                })
+    $script:ConfigWatcher = New-Object System.Windows.Forms.Timer
+    $script:ConfigWatcher.Interval = 1000
+    $script:ConfigWatcher.Add_Tick({
+            if (-not $script:Form -or $script:Form.IsDisposed) { return }
+            if (-not (Test-Path -LiteralPath $script:AutoConfigPath -PathType Leaf)) { return }
+
+            $lastWrite = (Get-Item -LiteralPath $script:AutoConfigPath).LastWriteTimeUtc
+            if ($lastWrite -le $script:ConfigWatcherLastWriteUtc) { return }
+            $script:ConfigWatcherLastWriteUtc = $lastWrite
+
+            if ((Get-Date) -lt $script:IgnoreConfigWatcherUntil) {
+                Write-DiagnosticLog "Config watcher polling ignored internal write until $($script:IgnoreConfigWatcherUntil.ToString('o'))."
+                return
+            }
+
+            Write-DiagnosticLog 'Config watcher polling observed external config change.'
+            if ($script:ConfigReloadTimer) {
+                $script:ConfigReloadTimer.Stop()
+                $script:ConfigReloadTimer.Start()
+            }
         }
-    }
-    $script:ConfigWatcher.add_Changed($onConfigChanged)
-    $script:ConfigWatcher.add_Created($onConfigChanged)
-    $script:ConfigWatcher.add_Renamed($onConfigChanged)
-    $script:ConfigWatcher.EnableRaisingEvents = $true
+    )
+    $script:ConfigWatcher.Start()
+    Write-DiagnosticLog 'Config watcher polling timer started.'
 }
 
 function ConvertTo-AppVersion {
@@ -2261,6 +2655,7 @@ function Copy-AppUpdateFiles {
     param([Parameter(Mandatory)][string]$SourceRoot)
 
     $relativeItems = @(
+        'assets',
         'bin',
         'tools',
         'codex-history-sync-config.template.json',
@@ -2292,6 +2687,114 @@ function Copy-AppUpdateFiles {
             Copy-Item -LiteralPath $source -Destination $dest -Force
         }
     }
+}
+
+function ConvertTo-ProcessArgument {
+    param([AllowNull()][string]$Value)
+
+    if ($null -eq $Value) { return '""' }
+    if ($Value -eq '') { return '""' }
+    if ($Value -notmatch '[\s"]') { return $Value }
+    return '"' + ($Value -replace '"', '\"') + '"'
+}
+
+function Invoke-ProcessCapture {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [Parameter(Mandatory)][string]$WorkingDirectory,
+        [int]$TimeoutMilliseconds = 30000
+    )
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo.FileName = $FilePath
+    $process.StartInfo.Arguments = (($Arguments | ForEach-Object { ConvertTo-ProcessArgument $_ }) -join ' ')
+    $process.StartInfo.WorkingDirectory = $WorkingDirectory
+    $process.StartInfo.UseShellExecute = $false
+    $process.StartInfo.CreateNoWindow = $true
+    $process.StartInfo.RedirectStandardOutput = $true
+    $process.StartInfo.RedirectStandardError = $true
+
+    [void]$process.Start()
+    if (-not $process.WaitForExit($TimeoutMilliseconds)) {
+        try { $process.Kill() } catch { }
+        return [pscustomobject]@{
+            ExitCode = -1
+            Output   = ''
+            Error    = "process timed out after $TimeoutMilliseconds ms"
+        }
+    }
+
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+    $exitCode = $process.ExitCode
+    $process.Dispose()
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Output   = $stdout
+        Error    = $stderr
+    }
+}
+
+function Get-GitCommandPath {
+    foreach ($name in @('git.exe', 'git')) {
+        $cmd = Get-Command $name -ErrorAction SilentlyContinue
+        if ($cmd -and -not [string]::IsNullOrWhiteSpace($cmd.Source)) {
+            return $cmd.Source
+        }
+    }
+    return $null
+}
+
+function Invoke-GitHubRepositorySync {
+    $gitDir = Join-Path $script:RootDir '.git'
+    if (-not (Test-Path -LiteralPath $gitDir)) {
+        Append-Log '当前目录不是 Git checkout，跳过 GitHub 自动同步，继续使用 ZIP 热更新。'
+        return $false
+    }
+
+    $git = Get-GitCommandPath
+    if ([string]::IsNullOrWhiteSpace($git)) {
+        Append-Log '未找到 git 命令，跳过 GitHub 自动同步，继续使用 ZIP 热更新。'
+        return $false
+    }
+
+    $remote = Invoke-ProcessCapture -FilePath $git -Arguments @('remote', 'get-url', 'origin') -WorkingDirectory $script:RootDir -TimeoutMilliseconds 10000
+    if ($remote.ExitCode -ne 0) {
+        Append-Log "读取 Git origin 失败，跳过 GitHub 自动同步：$($remote.Error.Trim())"
+        return $false
+    }
+
+    $remoteUrl = (($remote.Output + $remote.Error).Trim()).ToLowerInvariant()
+    $expectedRepo = $script:GitHubRepo.ToLowerInvariant()
+    if ($remoteUrl -notlike "*$expectedRepo*") {
+        Append-Log "Git origin 不是 $script:GitHubRepo，跳过 GitHub 自动同步：$($remoteUrl)"
+        return $false
+    }
+
+    $status = Invoke-ProcessCapture -FilePath $git -Arguments @('status', '--porcelain') -WorkingDirectory $script:RootDir -TimeoutMilliseconds 10000
+    if ($status.ExitCode -ne 0) {
+        Append-Log "读取 Git 工作区状态失败，跳过 GitHub 自动同步：$($status.Error.Trim())"
+        return $false
+    }
+    if (-not [string]::IsNullOrWhiteSpace(($status.Output + $status.Error).Trim())) {
+        Append-Log '检测到本地 Git 工作区已有未提交改动，跳过 GitHub 自动同步，避免覆盖本地改动；继续使用 ZIP 热更新。'
+        return $false
+    }
+
+    Append-Log '当前目录是干净的 GitHub checkout，正在自动同步 GitHub main...'
+    $pull = Invoke-ProcessCapture -FilePath $git -Arguments @('pull', '--ff-only', 'origin', 'main') -WorkingDirectory $script:RootDir -TimeoutMilliseconds 60000
+    $pullText = (($pull.Output + $pull.Error).Trim())
+    if ($pull.ExitCode -ne 0) {
+        Append-Log "GitHub 自动同步失败，继续使用 ZIP 热更新：$pullText"
+        return $false
+    }
+
+    if ([string]::IsNullOrWhiteSpace($pullText)) {
+        $pullText = 'git pull --ff-only origin main completed.'
+    }
+    Append-Log "GitHub 自动同步完成：$pullText"
+    return $true
 }
 
 function Restart-AppAfterUpdate {
@@ -2341,24 +2844,30 @@ function Invoke-AppSelfUpdate {
         return
     }
 
-    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ('codex-history-sync-update-' + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
-    $zipPath = Join-Path $tempDir 'main.zip'
+    $updatedByGit = Invoke-GitHubRepositorySync
+    $tempDir = $null
     try {
-        $zipUri = "https://github.com/$script:GitHubRepo/archive/refs/heads/main.zip"
-        Append-Log "正在下载更新包：$zipUri"
-        Invoke-HttpDownload -Uri $zipUri -OutFile $zipPath
+        if (-not $updatedByGit) {
+            $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ('codex-history-sync-update-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+            $zipPath = Join-Path $tempDir 'main.zip'
 
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $tempDir)
-        $sourceRoot = Get-ChildItem -LiteralPath $tempDir -Directory |
-            Where-Object { $_.Name -like 'codex-history-sync-portable-*' } |
-            Select-Object -First 1
-        if (-not $sourceRoot) {
-            throw '更新包结构不符合预期。'
+            $zipUri = "https://github.com/$script:GitHubRepo/archive/refs/heads/main.zip"
+            Append-Log "正在下载更新包：$zipUri"
+            Invoke-HttpDownload -Uri $zipUri -OutFile $zipPath
+
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $tempDir)
+            $sourceRoot = Get-ChildItem -LiteralPath $tempDir -Directory |
+                Where-Object { $_.Name -like 'codex-history-sync-portable-*' } |
+                Select-Object -First 1
+            if (-not $sourceRoot) {
+                throw '更新包结构不符合预期。'
+            }
+
+            Copy-AppUpdateFiles -SourceRoot $sourceRoot.FullName
         }
 
-        Copy-AppUpdateFiles -SourceRoot $sourceRoot.FullName
         Append-Log "更新完成：$script:AppVersion -> $remoteVersion"
 
         $restart = [System.Windows.Forms.MessageBox]::Show(
@@ -2372,7 +2881,9 @@ function Invoke-AppSelfUpdate {
         }
     }
     finally {
-        try { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+        if (-not [string]::IsNullOrWhiteSpace($tempDir)) {
+            try { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+        }
     }
 }
 
@@ -2496,6 +3007,24 @@ function Get-CodexExecutable {
     throw "找不到 codex.exe。请确认 Codex CLI 已安装并加入 PATH；或点击【软件配置文件】，填写 codexExe 后保存。配置文件：$script:AutoConfigPath"
 }
 
+function Test-CodexSupportsBypassFullAccess {
+    param([Parameter(Mandatory)][string]$CodexExe)
+
+    if ($null -ne $script:CodexSupportsBypassFullAccess) {
+        return [bool]$script:CodexSupportsBypassFullAccess
+    }
+
+    try {
+        $help = (& $CodexExe --help 2>&1 | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+        $script:CodexSupportsBypassFullAccess = ($help -match '--dangerously-bypass-approvals-and-sandbox')
+    }
+    catch {
+        $script:CodexSupportsBypassFullAccess = $false
+    }
+
+    return [bool]$script:CodexSupportsBypassFullAccess
+}
+
 function ConvertTo-PowerShellSingleQuotedString {
     param([AllowNull()][string]$Value)
 
@@ -2615,37 +3144,60 @@ function Start-CodexInDirectory {
     )
 
     $codexExe = Get-CodexExecutable
-    $codexArgs = New-Object System.Collections.Generic.List[string]
+    $commonArgs = New-Object System.Collections.Generic.List[string]
     $resolvedDirectory = (Resolve-Path -LiteralPath $Directory).Path
-    $codexArgs.Add('-C')
-    $codexArgs.Add($resolvedDirectory)
+    $commonArgs.Add('-C')
+    $commonArgs.Add($resolvedDirectory)
     if ($DisableApps) {
-        $codexArgs.Add('--disable')
-        $codexArgs.Add('apps')
+        $commonArgs.Add('--disable')
+        $commonArgs.Add('apps')
     }
     if ($ApprovalNever) {
-        $codexArgs.Add('-a')
-        $codexArgs.Add('never')
+        if (Test-CodexSupportsBypassFullAccess -CodexExe $codexExe) {
+            $commonArgs.Add('--dangerously-bypass-approvals-and-sandbox')
+        }
+        else {
+            $commonArgs.Add('--sandbox')
+            $commonArgs.Add('danger-full-access')
+            $commonArgs.Add('-a')
+            $commonArgs.Add('never')
+        }
     }
+    $codexArgs = New-Object System.Collections.Generic.List[string]
     if (-not [string]::IsNullOrWhiteSpace($ResumeId)) {
         $safeResumeId = $ResumeId.Trim()
         if ($safeResumeId -match '[\s"&|<>^]') {
             throw "会话 ID 包含终端不支持的字符，无法安全启动：$safeResumeId"
         }
         $codexArgs.Add('resume')
+        foreach ($arg in $commonArgs) { $codexArgs.Add($arg) }
         $codexArgs.Add($safeResumeId)
+    }
+    else {
+        foreach ($arg in $commonArgs) { $codexArgs.Add($arg) }
     }
 
     $shell = Get-LaunchShell -PreferPowerShell:$PreferPowerShell
+    Write-DiagnosticLog ("Start-CodexInDirectory shell={0} directory='{1}' resume='{2}' args=[{3}]" -f
+        $shell.Name,
+        $resolvedDirectory,
+        $ResumeId,
+        (($codexArgs | ForEach-Object { [string]$_ }) -join ', '))
+
     if ($shell.Name -eq 'PowerShell') {
         $adminPrelude = @(
             '$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)',
             'if ($isAdmin) { $Host.UI.RawUI.WindowTitle = ''管理员 PowerShell - Codex''; Write-Host ''[管理员模式] 当前终端已提权'' -ForegroundColor Green } else { $Host.UI.RawUI.WindowTitle = ''非管理员 PowerShell - Codex''; Write-Host ''[非管理员] 当前终端未提权'' -ForegroundColor Yellow }'
         ) -join '; '
+        $psExitLog = '; $codexExit = if ($null -ne $global:LASTEXITCODE) { $global:LASTEXITCODE } else { 0 }; Write-Host (''[Codex退出码] '' + $codexExit) -ForegroundColor Yellow; Add-Content -LiteralPath ' +
+            (ConvertTo-PowerShellSingleQuotedString $script:DiagnosticLogPath) +
+            ' -Encoding UTF8 -Value (''['' + (Get-Date -Format ''yyyy-MM-dd HH:mm:ss.fff zzz'') + ''] [' +
+            $script:DiagnosticSessionId +
+            '] Codex process exited code='' + $codexExit)'
         $psCommand = $adminPrelude + '; ' + ('Set-Location -LiteralPath {0}; & {1} {2}' -f
             (ConvertTo-PowerShellSingleQuotedString $resolvedDirectory),
             (ConvertTo-PowerShellSingleQuotedString $codexExe),
-            (($codexArgs | ForEach-Object { ConvertTo-PowerShellSingleQuotedString $_ }) -join ' '))
+            (($codexArgs | ForEach-Object { ConvertTo-PowerShellSingleQuotedString $_ }) -join ' ')) + $psExitLog
         $psArgs = @(
             '-NoExit',
             '-NoProfile',
@@ -2658,17 +3210,20 @@ function Start-CodexInDirectory {
             -WorkingDirectory $resolvedDirectory `
             -ArgumentList $psArgs `
             -Verb RunAs
+        Write-DiagnosticLog "Start-Process launched PowerShell for Codex."
         return $shell.Name
     }
 
     $commandParts = @((ConvertTo-CmdArgument $codexExe)) + @($codexArgs | ForEach-Object { ConvertTo-CmdArgument $_ })
     $codexCommand = ($commandParts -join ' ').Trim()
     $adminPrelude = '(fltmc >nul 2>&1 && (title 管理员 CMD - Codex && echo [管理员模式] 当前终端已提权) || (title 非管理员 CMD - Codex && echo [非管理员] 当前终端未提权))'
-    $command = $adminPrelude + ' & cd /d ' + (ConvertTo-CmdArgument $resolvedDirectory) + ' && ' + $codexCommand
+    $cmdExitLog = ' & set CODEX_EXIT=%ERRORLEVEL% & echo [Codex退出码] %CODEX_EXIT% & echo [%DATE% %TIME%] [' + $script:DiagnosticSessionId + '] Codex process exited code=%CODEX_EXIT%>> ' + (ConvertTo-CmdArgument $script:DiagnosticLogPath)
+    $command = $adminPrelude + ' & cd /d ' + (ConvertTo-CmdArgument $resolvedDirectory) + ' && ' + $codexCommand + $cmdExitLog
     Start-Process -FilePath $shell.Path `
         -WorkingDirectory $resolvedDirectory `
         -ArgumentList @('/d', '/k', $command) `
         -Verb RunAs
+    Write-DiagnosticLog "Start-Process launched CMD for Codex."
     return $shell.Name
 }
 
@@ -2697,20 +3252,15 @@ function Backup-ProviderSwitchFiles {
 function Get-CcSwitchProviderForHistoryProvider {
     param([Parameter(Mandatory)][string]$HistoryProvider)
 
-    if ($HistoryProvider -eq 'openai') {
-        $sql = "select id,name,settings_config from providers where app_type='codex' and id='codex-official' limit 1;"
-    }
-    elseif ($HistoryProvider -eq 'custom') {
-        $sql = "select id,name,settings_config from providers where app_type='codex' and name='Any Router' order by is_current desc limit 1;"
-    }
-    else {
-        $safe = Quote-Sql $HistoryProvider
-        $sql = "select id,name,settings_config from providers where app_type='codex' and (id=$safe or name=$safe) order by is_current desc limit 1;"
-    }
-
-    $rows = Invoke-CcSwitchSqlJson $sql
+    $rows = @(Get-CcSwitchCodexProviders | Where-Object {
+            Test-CcSwitchProviderAllowedForHistoryProvider -ProviderRow $_ -HistoryProvider $HistoryProvider
+        })
     if ($rows.Count -eq 0) {
         throw "找不到与历史账号 '$HistoryProvider' 对应的 cc-switch Codex provider。"
+    }
+
+    foreach ($row in $rows) {
+        if ([bool]$row.is_current) { return $row }
     }
     return $rows[0]
 }
@@ -2737,6 +3287,19 @@ function Get-CodexConfigStringValue {
     $match = [System.Text.RegularExpressions.Regex]::Match($Config, $pattern)
     if (-not $match.Success) { return '' }
     return $match.Groups[1].Value
+}
+
+function Get-CodexModelProviderNameFromConfig {
+    param(
+        [AllowNull()][string]$Config,
+        [AllowNull()][string]$ProviderId
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Config) -or [string]::IsNullOrWhiteSpace($ProviderId)) { return '' }
+    $sectionPattern = '(?ms)^\s*\[model_providers\.' + [regex]::Escape($ProviderId.Trim()) + '\]\s*\r?\n(?<body>.*?)(?=^\s*\[|\z)'
+    $section = [System.Text.RegularExpressions.Regex]::Match($Config, $sectionPattern)
+    if (-not $section.Success) { return '' }
+    return Get-CodexConfigStringValue $section.Groups['body'].Value 'name'
 }
 
 function Get-SyncTargetProfileArgs {
@@ -2780,6 +3343,48 @@ function Test-CcSwitchOfficialProvider {
     param([Parameter(Mandatory)]$Provider)
 
     return ([string]$Provider.id) -eq 'codex-official'
+}
+
+function Normalize-ProviderKey {
+    param([AllowNull()][string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
+    return $Value.Trim().ToLowerInvariant()
+}
+
+function Test-CcSwitchProviderAllowedForHistoryProvider {
+    param(
+        [Parameter(Mandatory)]$ProviderRow,
+        [AllowNull()][string]$HistoryProvider
+    )
+
+    $history = Normalize-ProviderKey $HistoryProvider
+    if ([string]::IsNullOrWhiteSpace($history)) { return $true }
+
+    $mappedHistory = Normalize-ProviderKey (Get-HistoryProviderFromCcSwitchProvider $ProviderRow)
+    if ($history -in @('openai', 'custom', 'rightcode')) {
+        return $mappedHistory -eq $history
+    }
+
+    if ($mappedHistory -eq $history) { return $true }
+
+    $id = Normalize-ProviderKey ([string]$ProviderRow.id)
+    $name = Normalize-ProviderKey ([string]$ProviderRow.name)
+    return $id -eq $history -or $name -eq $history -or $name -like "*$history*"
+}
+
+function Assert-CcSwitchProviderAllowedForHistoryProvider {
+    param(
+        [Parameter(Mandatory)]$ProviderRow,
+        [AllowNull()][string]$HistoryProvider
+    )
+
+    if (Test-CcSwitchProviderAllowedForHistoryProvider -ProviderRow $ProviderRow -HistoryProvider $HistoryProvider) {
+        return
+    }
+
+    $providerName = Get-CcSwitchAccountLabel $ProviderRow
+    throw "当前源账号 '$HistoryProvider' 不能使用 cc-switch 供应商 '$providerName' 启动。已阻止本次启动，避免账号与聊天记录类型不匹配导致 Codex 闪退。请刷新后选择匹配的 cc-switch 供应商。"
 }
 
 function Enable-CcSwitchCodexRouteForProvider {
@@ -3146,30 +3751,23 @@ function Set-CodexTurnEndedNotify {
         }
     }
 
-    if (-not [string]::IsNullOrWhiteSpace($script:NotifierLauncherPath) -and
-        (Test-Path -LiteralPath $script:NotifierLauncherPath)) {
-        $notifyArgs = @('wscript.exe', $script:NotifierLauncherPath)
-    }
-    else {
-        $notifyArgs = @(
-            'powershell.exe',
-            '-NoProfile',
-            '-STA',
-            '-ExecutionPolicy',
-            'Bypass',
-            '-WindowStyle',
-            'Hidden',
-            '-File',
-            $script:NotifierPath
-        )
-    }
+    $notifyArgs = @(
+        'powershell.exe',
+        '-NoProfile',
+        '-STA',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-WindowStyle',
+        'Hidden',
+        '-File',
+        $script:NotifierPath
+    )
     if (-not [string]::IsNullOrWhiteSpace($CodexHome)) {
         $notifyArgs += @('-CodexHome', $CodexHome)
     }
     if (-not [string]::IsNullOrWhiteSpace($forwardBase64)) {
         $notifyArgs += @('-ForwardBase64', $forwardBase64)
     }
-    $notifyArgs += '-ForwardOnly'
 
     $notifyLine = 'notify = [ ' + (($notifyArgs | ForEach-Object { ConvertTo-TomlBasicString ([string]$_) }) -join ', ') + ' ]'
     $pattern = '(?m)^\s*notify\s*=\s*\[[^\r\n]*\]\s*$'
@@ -3210,36 +3808,22 @@ function Show-TestTurnEndedNotify {
 
     $message = "账号：custom | 示例项目`r`n聊天：019eb473`r`n任务：测试弹窗显示完成摘要"
     $messageBase64 = [Convert]::ToBase64String($script:Utf8NoBom.GetBytes($message))
-    if (-not [string]::IsNullOrWhiteSpace($script:NotifierLauncherPath) -and
-        (Test-Path -LiteralPath $script:NotifierLauncherPath)) {
-        Start-Process -FilePath wscript.exe -ArgumentList @(
-            $script:NotifierLauncherPath,
-            '-CodexHome',
-            $CodexHome,
-            '-MessageBase64',
-            $messageBase64,
-            '-Seconds',
-            '8'
-        ) -WindowStyle Hidden | Out-Null
-    }
-    else {
-        Start-Process -FilePath powershell.exe -ArgumentList @(
-            '-NoProfile',
-            '-STA',
-            '-ExecutionPolicy',
-            'Bypass',
-            '-WindowStyle',
-            'Hidden',
-            '-File',
-            $script:NotifierPath,
-            '-CodexHome',
-            $CodexHome,
-            '-MessageBase64',
-            $messageBase64,
-            '-Seconds',
-            '8'
-        ) -WindowStyle Hidden | Out-Null
-    }
+    Start-Process -FilePath powershell.exe -ArgumentList @(
+        '-NoProfile',
+        '-STA',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-WindowStyle',
+        'Hidden',
+        '-File',
+        $script:NotifierPath,
+        '-CodexHome',
+        $CodexHome,
+        '-MessageBase64',
+        $messageBase64,
+        '-Seconds',
+        '8'
+    ) -WindowStyle Hidden | Out-Null
     Append-Log '已触发测试弹窗。'
 }
 
@@ -3283,36 +3867,22 @@ function Start-TurnCompleteMonitor {
 
     Stop-ExistingTurnCompleteMonitor
 
-    if (-not [string]::IsNullOrWhiteSpace($script:TurnCompleteMonitorLauncherPath) -and
-        (Test-Path -LiteralPath $script:TurnCompleteMonitorLauncherPath)) {
-        Start-Process -FilePath wscript.exe -ArgumentList @(
-            $script:TurnCompleteMonitorLauncherPath,
-            '-CodexHome',
-            $CodexHome,
-            '-NotifierLauncherPath',
-            $script:NotifierLauncherPath,
-            '-NotifierPath',
-            $script:NotifierPath
-        ) -WindowStyle Hidden | Out-Null
-    }
-    else {
-        Start-Process -FilePath powershell.exe -ArgumentList @(
-            '-NoProfile',
-            '-STA',
-            '-ExecutionPolicy',
-            'Bypass',
-            '-WindowStyle',
-            'Hidden',
-            '-File',
-            $script:TurnCompleteMonitorPath,
-            '-CodexHome',
-            $CodexHome,
-            '-NotifierLauncherPath',
-            $script:NotifierLauncherPath,
-            '-NotifierPath',
-            $script:NotifierPath
-        ) -WindowStyle Hidden | Out-Null
-    }
+    Start-Process -FilePath powershell.exe -ArgumentList @(
+        '-NoProfile',
+        '-STA',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-WindowStyle',
+        'Hidden',
+        '-File',
+        $script:TurnCompleteMonitorPath,
+        '-CodexHome',
+        $CodexHome,
+        '-NotifierLauncherPath',
+        $script:NotifierLauncherPath,
+        '-NotifierPath',
+        $script:NotifierPath
+    ) -WindowStyle Hidden | Out-Null
 
     Append-Log '已启动桌面版弹窗提醒监控。'
 }
@@ -3433,6 +4003,10 @@ function Switch-CodexProviderRow {
 
     Assert-CodexHomeReady
     $provider = $Provider
+    Write-DiagnosticLog ("Switch-CodexProviderRow start id='{0}' name='{1}' history='{2}'" -f
+        ([string]$provider.id),
+        ([string]$provider.name),
+        (Get-HistoryProviderFromCcSwitchProvider $provider))
     $settings = [string]$provider.settings_config | ConvertFrom-Json
     if (-not $settings) {
         throw "provider '$($provider.name)' 的 settings_config 无法解析。"
@@ -3473,19 +4047,21 @@ function Switch-CodexProviderRow {
 
     Enable-CcSwitchCodexRouteForProvider $provider
     Append-Log "已切换 cc switch 节点：$($provider.name)。备份：$backupDir"
+    Write-DiagnosticLog ("Switch-CodexProviderRow done id='{0}' name='{1}' backup='{2}'" -f ([string]$provider.id), ([string]$provider.name), $backupDir)
     return $provider
 }
 
 function Invoke-LaunchForProvider {
     param([Parameter(Mandatory)]$Combo)
 
+    Update-CcSwitchAccountComboForCurrentSource
     $providerLabel = [string]$Combo.SelectedItem
     $providerId = Resolve-CcSwitchProviderId $providerLabel
     if ([string]::IsNullOrWhiteSpace($providerId)) {
         throw '请先选择 cc-switch供应商。若下拉菜单为空，请点击【软件配置文件】填写 ccSwitchHome 后保存，或点击【加载cc-switch.db文件】选择 cc-switch.db。'
     }
-    $loadCheckedRecord = $script:LoadCheckedRecordBox -and [bool]$script:LoadCheckedRecordBox.Checked
-    $resumeSelection = if ($loadCheckedRecord) { Get-LaunchResumeSelection } else { $null }
+    $loadChatOnLaunch = $script:LoadCheckedRecordBox -and [bool]$script:LoadCheckedRecordBox.Checked
+    $resumeSelection = if ($loadChatOnLaunch) { Get-LaunchResumeSelection } else { $null }
     $resumeId = $null
     if ($resumeSelection) {
         $resumeId = [string]$resumeSelection.Id
@@ -3495,7 +4071,23 @@ function Invoke-LaunchForProvider {
         $directory = Resolve-LaunchDirectory
     }
 
-    Switch-CodexProviderById $providerId | Out-Null
+    $launchHistoryProvider = Get-CurrentSourceProvider
+    if ($resumeSelection -and -not [string]::IsNullOrWhiteSpace([string]$resumeSelection.Provider)) {
+        $launchHistoryProvider = Resolve-ProviderValue ([string]$resumeSelection.Provider)
+    }
+    $provider = Get-CcSwitchProviderById $providerId
+    Write-DiagnosticLog ("Launch requested source='{0}' resumeProvider='{1}' launchHistory='{2}' ccLabel='{3}' ccId='{4}' ccName='{5}' ccHistory='{6}' resumeId='{7}' directory='{8}'" -f
+        (Get-CurrentSourceProvider),
+        $(if ($resumeSelection) { [string]$resumeSelection.Provider } else { '' }),
+        $launchHistoryProvider,
+        $providerLabel,
+        $providerId,
+        ([string]$provider.name),
+        (Get-HistoryProviderFromCcSwitchProvider $provider),
+        $resumeId,
+        $directory)
+    Assert-CcSwitchProviderAllowedForHistoryProvider -ProviderRow $provider -HistoryProvider $launchHistoryProvider
+    Switch-CodexProviderRow $provider | Out-Null
     if ($script:TurnEndedNotifyBox -and [bool]$script:TurnEndedNotifyBox.Checked) {
         Start-TurnCompleteMonitor
     }
@@ -3506,7 +4098,15 @@ function Invoke-LaunchForProvider {
     $launchShell = Start-CodexInDirectory -Directory $directory -DisableApps:$disableApps -ApprovalNever:$approvalNever -ResumeId $resumeId -PreferPowerShell:$preferPowerShell
     $launchFlags = @()
     if ($disableApps) { $launchFlags += '--disable apps' }
-    if ($approvalNever) { $launchFlags += '-a never' }
+    if ($approvalNever) {
+        if ([bool]$script:CodexSupportsBypassFullAccess) {
+            $launchFlags += '--dangerously-bypass-approvals-and-sandbox'
+        }
+        else {
+            $launchFlags += '--sandbox danger-full-access'
+            $launchFlags += '-a never'
+        }
+    }
     $launchFlagText = if ($launchFlags.Count -gt 0) { '，并追加 ' + ($launchFlags -join '、') } else { '' }
     if (-not [string]::IsNullOrWhiteSpace($resumeId)) {
         Append-Log "已用 $providerLabel 管理员 $launchShell 恢复 Codex 会话 $resumeId$launchFlagText：$directory"
@@ -3522,6 +4122,7 @@ function Get-CheckedThreadRows {
     $items = New-Object System.Collections.Generic.List[object]
     $selectedColumn = Get-GridColumnByProperty 'Selected'
     $idColumn = Get-GridColumnByProperty 'Id'
+    $providerColumn = Get-GridColumnByProperty 'Provider'
     $cwdColumn = Get-GridColumnByProperty 'Cwd'
     $titleColumn = Get-GridColumnByProperty 'Title'
     if (-not $selectedColumn -or -not $idColumn) { return $items.ToArray() }
@@ -3532,14 +4133,17 @@ function Get-CheckedThreadRows {
         if ($isChecked) {
             $id = [string]$row.Cells[$idColumn.Index].Value
             if (-not [string]::IsNullOrWhiteSpace($id)) {
+                $provider = ''
                 $cwd = ''
                 $title = ''
+                if ($providerColumn) { $provider = [string]$row.Cells[$providerColumn.Index].Value }
                 if ($cwdColumn) { $cwd = [string]$row.Cells[$cwdColumn.Index].Value }
                 if ($titleColumn) { $title = [string]$row.Cells[$titleColumn.Index].Value }
                 $items.Add([pscustomobject]@{
-                        Id    = $id.Trim()
-                        Cwd   = $cwd
-                        Title = $title
+                        Id       = $id.Trim()
+                        Provider = $provider
+                        Cwd      = $cwd
+                        Title    = $title
                     })
             }
         }
@@ -3558,12 +4162,24 @@ function Get-CheckedThreadIds {
 }
 
 function Get-LaunchResumeSelection {
-    $rows = @(Get-CheckedThreadRows)
-    if ($rows.Count -eq 0) { return $null }
-    if ($rows.Count -gt 1) {
-        throw '从终端启动一次只能恢复一条勾选记录。请只勾选一条；不勾选则在当前目录新建对话。'
+    $row = Get-CurrentGridRow
+    if (-not $row) { return $null }
+
+    $idColumn = Get-GridColumnByProperty 'Id'
+    $providerColumn = Get-GridColumnByProperty 'Provider'
+    $cwdColumn = Get-GridColumnByProperty 'Cwd'
+    $titleColumn = Get-GridColumnByProperty 'Title'
+    if (-not $idColumn) { return $null }
+
+    $id = [string]$row.Cells[$idColumn.Index].Value
+    if ([string]::IsNullOrWhiteSpace($id)) { return $null }
+
+    return [pscustomobject]@{
+        Id       = $id.Trim()
+        Provider = if ($providerColumn) { [string]$row.Cells[$providerColumn.Index].Value } else { '' }
+        Cwd      = if ($cwdColumn) { [string]$row.Cells[$cwdColumn.Index].Value } else { '' }
+        Title    = if ($titleColumn) { [string]$row.Cells[$titleColumn.Index].Value } else { '' }
     }
-    return $rows[0]
 }
 
 function Get-CurrentGridRow {
@@ -3632,7 +4248,7 @@ function Copy-CurrentCellToClipboard {
         return
     }
     if (Copy-TextToClipboard $value) {
-        Append-Log "已复制当前单元格：$value"
+        Append-Log "已复制此单元格：$value"
     }
 }
 
@@ -3648,6 +4264,97 @@ function Open-CurrentWorkspaceDirectory {
     Append-Log "已打开项目目录：$cwd"
 }
 
+function Get-ClonedThreadIdFromSyncOutput {
+    param([AllowNull()][string]$Output)
+
+    if ([string]::IsNullOrWhiteSpace($Output)) { return '' }
+    $matches = [System.Text.RegularExpressions.Regex]::Matches($Output, '(?im)^\s*cloned_id\s*:\s*(?<id>\S+)\s*$')
+    if ($matches.Count -eq 0) { return '' }
+    return [string]$matches[$matches.Count - 1].Groups['id'].Value
+}
+
+function Switch-SourceProviderAndFocusThread {
+    param(
+        [Parameter(Mandatory)][string]$Provider,
+        [AllowNull()][string]$ThreadId
+    )
+
+    $oldSuppress = $script:SuppressThreadRefresh
+    try {
+        $script:SuppressThreadRefresh = $true
+        Select-Provider $script:SourceCombo $Provider
+        Update-TargetProviderComboForCurrentSource
+        Update-CcSwitchAccountComboForCurrentSource
+        Refresh-CwdOptions
+    }
+    finally {
+        $script:SuppressThreadRefresh = $oldSuppress
+    }
+    Refresh-Threads -FocusThreadId $ThreadId
+    Save-AppState
+}
+
+function Invoke-CloneCurrentRowToTarget {
+    param([Parameter(Mandatory)][string]$TargetProvider)
+
+    $row = Get-CurrentGridRow
+    if (-not $row) { return }
+    $id = [string](Get-CurrentGridValue 'Id')
+    if ([string]::IsNullOrWhiteSpace($id)) { return }
+
+    $source = Get-CurrentSourceProvider
+    Assert-HistoryTargetProviderAllowed -SourceProvider $source -TargetProvider $TargetProvider
+
+    $answer = [System.Windows.Forms.MessageBox]::Show(
+        "即将同步当前记录到 $(Get-ProviderLabel $TargetProvider)。工具会先创建备份。是否继续？",
+        '确认同步当前记录',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Warning
+    )
+    if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) {
+        Append-Log '已取消。'
+        return
+    }
+
+    $output = Invoke-SyncCli -CommandArgs (@('clone', '-Id', $id, '-To', $TargetProvider) + (Get-SyncTargetProfileArgs $TargetProvider)) -SkipConfirm -NoRefresh
+    if ($null -eq $output) { return }
+    $clonedId = Get-ClonedThreadIdFromSyncOutput $output
+    if ([string]::IsNullOrWhiteSpace($clonedId)) {
+        Append-Log '同步已完成，但未能从输出中解析目标线程 ID，已切换到目标账号。'
+    }
+    Switch-SourceProviderAndFocusThread -Provider $TargetProvider -ThreadId $clonedId
+}
+
+function Update-GridSyncToMenuItems {
+    if (-not $script:GridSyncToMenuItem) { return }
+
+    $script:GridSyncToMenuItem.DropDownItems.Clear()
+    $source = Get-CurrentSourceProvider
+    $providers = @(Get-Providers)
+    foreach ($provider in $providers) {
+        if (Test-SameHistoryProvider $provider $source) { continue }
+        $targetProvider = [string]$provider
+        $item = New-Object System.Windows.Forms.ToolStripMenuItem
+        $item.Text = Get-ProviderLabel $targetProvider
+        $item.Add_Click({
+                try {
+                    Invoke-CloneCurrentRowToTarget -TargetProvider $targetProvider
+                }
+                catch {
+                    Show-GuiError $_
+                }
+            }.GetNewClosure())
+        [void]$script:GridSyncToMenuItem.DropDownItems.Add($item)
+    }
+
+    if ($script:GridSyncToMenuItem.DropDownItems.Count -eq 0) {
+        $emptyItem = New-Object System.Windows.Forms.ToolStripMenuItem
+        $emptyItem.Text = '无可用目标账号'
+        $emptyItem.Enabled = $false
+        [void]$script:GridSyncToMenuItem.DropDownItems.Add($emptyItem)
+    }
+}
+
 function Invoke-CloneCheckedRowsToTarget {
     $ids = @(Get-CheckedThreadIds)
     $target = Resolve-ProviderValue ([string]$script:TargetCombo.SelectedItem)
@@ -3659,6 +4366,7 @@ function Invoke-CloneCheckedRowsToTarget {
         [System.Windows.Forms.MessageBox]::Show('请先选择 Codex目标账号。', '未选择 Codex目标账号', 'OK', 'Information') | Out-Null
         return
     }
+    Assert-HistoryTargetProviderAllowed -SourceProvider (Get-CurrentSourceProvider) -TargetProvider $target
     $answer = [System.Windows.Forms.MessageBox]::Show(
         "即将同步 $($ids.Count) 条勾选记录到 $(Get-ProviderLabel $target)。工具会先创建备份。是否继续？",
         '确认同步勾选记录',
@@ -3684,6 +4392,7 @@ function Invoke-SyncAllRowsToTarget {
         [System.Windows.Forms.MessageBox]::Show('请先选择 Codex源账号和 Codex目标账号。', '账号不完整', 'OK', 'Information') | Out-Null
         return
     }
+    Assert-HistoryTargetProviderAllowed -SourceProvider $source -TargetProvider $target
     Invoke-SyncCli -CommandArgs (@('sync', '-From', $source, '-To', $target) + (Get-SyncTargetProfileArgs $target))
 }
 
@@ -3695,7 +4404,6 @@ function Invoke-LaunchCurrentGridRow {
     try {
         $script:SuppressThreadRefresh = $true
         if ($WithChat) {
-            Set-OnlyCurrentRowChecked
             if ($script:LoadCheckedRecordBox) { $script:LoadCheckedRecordBox.Checked = $true }
         }
         else {
@@ -3744,6 +4452,29 @@ function Get-GridColumnByProperty {
     return $null
 }
 
+function Select-GridRowByThreadId {
+    param([AllowNull()][string]$ThreadId)
+
+    if ([string]::IsNullOrWhiteSpace($ThreadId) -or -not $script:Grid) { return $false }
+    $idColumn = Get-GridColumnByProperty 'Id'
+    if (-not $idColumn) { return $false }
+
+    foreach ($row in $script:Grid.Rows) {
+        if ($row.IsNewRow) { continue }
+        if ([string]::Equals([string]$row.Cells[$idColumn.Index].Value, $ThreadId, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $script:Grid.ClearSelection()
+            $row.Selected = $true
+            $script:Grid.CurrentCell = $row.Cells[$idColumn.Index]
+            try {
+                $script:Grid.FirstDisplayedScrollingRowIndex = $row.Index
+            }
+            catch { }
+            return $true
+        }
+    }
+    return $false
+}
+
 function Invoke-SyncCli {
     param(
         [string[]]$CommandArgs,
@@ -3761,7 +4492,7 @@ function Invoke-SyncCli {
         )
         if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) {
             Append-Log '已取消。'
-            return
+            return $null
         }
     }
 
@@ -3794,9 +4525,11 @@ function Invoke-SyncCli {
             Refresh-Providers
             Refresh-Threads
         }
+        return $output
     }
     catch {
         Show-GuiError $_
+        return $null
     }
     finally {
         $script:Form.Cursor = [System.Windows.Forms.Cursors]::Default
@@ -3807,11 +4540,12 @@ function Refresh-Providers {
     $oldSuppress = $script:SuppressThreadRefresh
     try {
         $ccSwitchProviders = @(Get-CcSwitchCodexProviders)
-        Reset-CcSwitchAccountCombo $ccSwitchProviders
+        $script:CcSwitchCodexProviders = $ccSwitchProviders
 
         if (-not (Test-CodexHomeReady)) {
             if ($script:SourceCombo) { $script:SourceCombo.Items.Clear() }
             if ($script:TargetCombo) { $script:TargetCombo.Items.Clear() }
+            Reset-CcSwitchAccountCombo -Providers $ccSwitchProviders -HistoryProvider $null
             if ($script:StatusLabel) { $script:StatusLabel.Text = '请先加载 codex 账号' }
             if ($script:CodexHomeResolveError) { Append-Log $script:CodexHomeResolveError }
             return
@@ -3832,7 +4566,9 @@ function Refresh-Providers {
         }
 
         Reset-ProviderCombo $script:SourceCombo $providers $(if ($currentSource) { $currentSource } else { 'openai' })
-        Reset-ProviderCombo $script:TargetCombo $providers $(if ($currentTarget) { $currentTarget } else { 'custom' })
+        $source = Resolve-ProviderValue ([string]$script:SourceCombo.SelectedItem)
+        Reset-ProviderCombo $script:TargetCombo $providers $(if ($currentTarget) { $currentTarget } else { 'custom' }) -ExcludedProvider $source
+        Reset-CcSwitchAccountCombo -Providers $ccSwitchProviders -HistoryProvider (Get-CurrentSourceProvider)
     }
     catch {
         Append-Log $_.Exception.Message
@@ -3877,6 +4613,8 @@ function Refresh-CwdOptions {
 }
 
 function Refresh-Threads {
+    param([AllowNull()][string]$FocusThreadId)
+
     try {
         if (-not (Test-CodexHomeReady)) {
             $script:LastThreadTableCount = 0
@@ -3945,6 +4683,14 @@ function Refresh-Threads {
         }
         $script:StatusLabel.Text = "记录数：$($items.Count)"
         Append-Log "已加载 $($items.Count) 条记录：$(Get-ProviderLabel $provider)"
+        if (-not [string]::IsNullOrWhiteSpace($FocusThreadId)) {
+            if (Select-GridRowByThreadId $FocusThreadId) {
+                Append-Log "已定位同步后的聊天记录：$FocusThreadId"
+            }
+            else {
+                Append-Log "已切换到目标账号，但当前列表中未找到同步后的聊天记录：$FocusThreadId"
+            }
+        }
     }
     catch {
         Show-GuiError $_
@@ -4114,9 +4860,9 @@ $launchGroup.Controls.Add($script:CodexProviderCombo)
 $openCodexButton = New-Button '从终端启动' 292 22 110 'Primary'
 $launchGroup.Controls.Add($openCodexButton)
 $script:LoadCheckedRecordBox = New-Object System.Windows.Forms.CheckBox
-$script:LoadCheckedRecordBox.Text = '按勾选加载聊天'
+$script:LoadCheckedRecordBox.Text = '启动时加载聊天'
 $script:LoadCheckedRecordBox.Location = New-Object System.Drawing.Point(414, 25)
-$script:LoadCheckedRecordBox.Size = New-Object System.Drawing.Size(128, 22)
+$script:LoadCheckedRecordBox.Size = New-Object System.Drawing.Size(140, 22)
 $script:LoadCheckedRecordBox.Checked = $true
 $launchGroup.Controls.Add($script:LoadCheckedRecordBox)
 $script:UsePowerShellLaunchBox = New-Object System.Windows.Forms.CheckBox
@@ -4129,7 +4875,7 @@ $script:ApprovalNeverLaunchBox = New-Object System.Windows.Forms.CheckBox
 $script:ApprovalNeverLaunchBox.Text = '完全访问(-a never)'
 $script:ApprovalNeverLaunchBox.Location = New-Object System.Drawing.Point(676, 25)
 $script:ApprovalNeverLaunchBox.Size = New-Object System.Drawing.Size(140, 22)
-$script:ApprovalNeverLaunchBox.Checked = $false
+$script:ApprovalNeverLaunchBox.Checked = $true
 $launchGroup.Controls.Add($script:ApprovalNeverLaunchBox)
 $script:TurnEndedNotifyBox = New-Object System.Windows.Forms.CheckBox
 $script:TurnEndedNotifyBox.Text = '弹窗提醒'
@@ -4213,17 +4959,18 @@ $gridLaunchWithChatItem.Add_Click({
         }
     })
 [void]$script:GridContextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
-$gridCloneCurrentItem = $script:GridContextMenu.Items.Add('同步至目标账号（此条）')
-$gridCloneCurrentItem.Add_Click({
+$script:GridSyncToMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem
+$script:GridSyncToMenuItem.Text = '同步此条至'
+[void]$script:GridContextMenu.Items.Add($script:GridSyncToMenuItem)
+$script:GridSyncToMenuItem.Add_DropDownOpening({
         try {
-            Set-OnlyCurrentRowChecked
-            Invoke-CloneCheckedRowsToTarget
+            Update-GridSyncToMenuItems
         }
         catch {
             Show-GuiError $_
         }
     })
-$gridCloneCheckedItem = $script:GridContextMenu.Items.Add('同步至目标账号（勾选）')
+$gridCloneCheckedItem = $script:GridContextMenu.Items.Add('同步勾选')
 $gridCloneCheckedItem.Add_Click({
         try {
             Invoke-CloneCheckedRowsToTarget
@@ -4232,7 +4979,7 @@ $gridCloneCheckedItem.Add_Click({
             Show-GuiError $_
         }
     })
-$gridSyncAllItem = $script:GridContextMenu.Items.Add('同步至目标账号（所有）')
+$gridSyncAllItem = $script:GridContextMenu.Items.Add('同步全部')
 $gridSyncAllItem.Add_Click({
         try {
             Invoke-SyncAllRowsToTarget
@@ -4263,18 +5010,12 @@ $gridOpenWorkspaceItem.Add_Click({
         }
     })
 [void]$script:GridContextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
-$gridCopyCellItem = $script:GridContextMenu.Items.Add('复制当前单元格')
+$gridCopyCellItem = $script:GridContextMenu.Items.Add('复制此单元格')
 $gridCopyCellItem.Add_Click({ Copy-CurrentCellToClipboard })
-$gridCopyIdItem = $script:GridContextMenu.Items.Add('复制线程 ID')
-$gridCopyIdItem.Add_Click({ Copy-GridValueToClipboard -ColumnName 'Id' -Label (Get-UiText 'GridThreadId') })
-$gridCopyCwdItem = $script:GridContextMenu.Items.Add('复制项目目录')
-$gridCopyCwdItem.Add_Click({ Copy-GridValueToClipboard -ColumnName 'Cwd' -Label (Get-UiText 'GridCwd') })
-$gridCopyTitleItem = $script:GridContextMenu.Items.Add('复制聊天内容')
-$gridCopyTitleItem.Add_Click({ Copy-GridValueToClipboard -ColumnName 'Title' -Label (Get-UiText 'GridTitle') })
 [void]$script:GridContextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
-$gridCheckOnlyItem = $script:GridContextMenu.Items.Add('只勾选此记录')
+$gridCheckOnlyItem = $script:GridContextMenu.Items.Add('只勾选此条')
 $gridCheckOnlyItem.Add_Click({ Set-OnlyCurrentRowChecked })
-$gridCheckExceptItem = $script:GridContextMenu.Items.Add('除此条外均勾选')
+$gridCheckExceptItem = $script:GridContextMenu.Items.Add('勾选除此所有条')
 $gridCheckExceptItem.Add_Click({ Set-AllRowsExceptCurrentChecked })
 $script:Grid.ContextMenuStrip = $script:GridContextMenu
 $script:GridContextMenu.Add_Opening({
@@ -4393,10 +5134,19 @@ $clearSelectionButton.Add_Click({ Set-AllRowsChecked $false })
 $swapButton.Add_Click({
         $source = Resolve-ProviderValue ([string]$script:SourceCombo.SelectedItem)
         $target = Resolve-ProviderValue ([string]$script:TargetCombo.SelectedItem)
-        if ($target) { Select-Provider $script:SourceCombo $target }
-        if ($source) { Select-Provider $script:TargetCombo $source }
+        $oldSuppress = $script:SuppressThreadRefresh
+        try {
+            $script:SuppressThreadRefresh = $true
+            if ($target) { Select-Provider $script:SourceCombo $target }
+            Update-TargetProviderComboForCurrentSource -PreferredProvider $source
+        }
+        finally {
+            $script:SuppressThreadRefresh = $oldSuppress
+        }
+        Update-CcSwitchAccountComboForCurrentSource
         Refresh-CwdOptions
         Refresh-Threads
+        Save-AppState
     })
 
 $cloneButton.Add_Click({
@@ -4424,6 +5174,7 @@ $mirrorButton.Add_Click({
             [System.Windows.Forms.MessageBox]::Show('请先选择两个 Codex 历史记录账号。', '账号不完整', 'OK', 'Information') | Out-Null
             return
         }
+        Assert-HistoryTargetProviderAllowed -SourceProvider $source -TargetProvider $target
         $answer = [System.Windows.Forms.MessageBox]::Show(
             "即将在 $(Get-ProviderLabel $source) 和 $(Get-ProviderLabel $target) 之间双向同步。工具会先创建备份。是否继续？",
             '确认双向同步',
@@ -4485,6 +5236,8 @@ $testNotifyButton.Add_Click({
 
 $script:SourceCombo.Add_SelectedIndexChanged({
         if (-not $script:SuppressThreadRefresh) {
+            Update-TargetProviderComboForCurrentSource
+            Update-CcSwitchAccountComboForCurrentSource
             Refresh-CwdOptions
             Refresh-Threads
             Save-AppState
@@ -4547,13 +5300,14 @@ $script:Grid.Add_CurrentCellDirtyStateChanged({
     })
 
 $script:Form.Add_Resize({
+        Remember-CurrentLanguageWindowWidth
         Layout-HeaderMeta
     })
 
 $script:Form.Add_FormClosing({
         Save-AppState
         if ($script:ConfigWatcher) {
-            $script:ConfigWatcher.EnableRaisingEvents = $false
+            try { $script:ConfigWatcher.Stop() } catch { }
             $script:ConfigWatcher.Dispose()
         }
         if ($script:ConfigReloadTimer) {
@@ -4578,11 +5332,18 @@ if (-not [string]::IsNullOrWhiteSpace($startupConfigPath)) {
 }
 
 Refresh-Providers
+if (-not [string]::IsNullOrWhiteSpace($SelfTestSourceProvider)) {
+    Select-Provider $script:SourceCombo $SelfTestSourceProvider
+    Update-TargetProviderComboForCurrentSource
+    Update-CcSwitchAccountComboForCurrentSource
+}
 Refresh-CwdOptions
 $script:SuppressThreadRefresh = $false
 Refresh-Threads
-Sync-AppConfigFileWithDetectedInfo -CreateIfMissing
-Start-AppConfigWatcher
+if (-not $SelfTest) {
+    Sync-AppConfigFileWithDetectedInfo -CreateIfMissing
+    Start-AppConfigWatcher
+}
 Append-Log '界面已加载。'
 if (Test-CodexHomeReady) {
     Append-Log "Codex 账号目录：$CodexHome"

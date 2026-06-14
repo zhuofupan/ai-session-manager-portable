@@ -14,9 +14,9 @@ Codex History Sync Portable 是一个 Windows 便携工具，用来把 Codex Des
 
 ## 软件截图
 
-![Codex History Sync GUI 界面预览](assets/screenshots/gui-overview.png)
+![Codex History Sync GUI 中文界面预览](assets/screenshots/gui-overview.zh-CN.png)
 
-截图只使用示例数据，不包含真实本地聊天记录。
+截图只使用示例数据和打码后的本地路径，不包含真实本地聊天记录。英文界面截图见 [README.md](README.md)。
 
 ## 项目卡片
 
@@ -97,19 +97,19 @@ GUI 里的主要控件如下：
 | `同步全部` | 同步当前源账号下列出的记录 |
 | `双向同步` | 在两个 provider 桶之间互相同步 |
 | `cc-switch供应商` | `从终端启动` 时使用哪个 cc-switch Codex 供应商 |
-| `从终端启动` | 以管理员身份打开终端；终端第一行会显示 `[管理员模式]` 或 `[非管理员]`；不勾选记录时新建对话；开启 `按勾选加载聊天` 且只勾选一条记录时自动恢复该会话 |
-| `按勾选加载聊天` | 开启后，勾选一条记录会执行 `codex resume <thread-id>`；关闭后忽略勾选并在当前目录新建对话 |
+| `从终端启动` | 以管理员身份打开终端；终端第一行会显示 `[管理员模式]` 或 `[非管理员]`；开启 `启动时加载聊天` 时恢复当前选中聊天，关闭时在当前目录新建对话 |
+| `启动时加载聊天` | 开启后，当前选中聊天会执行 `codex resume <thread-id>`；列表最左侧勾选列只用于同步勾选记录 |
 | `PowerShell启动` | 勾选时优先用 PowerShell 启动；取消勾选时优先用 CMD 启动；找不到首选终端时会自动退回另一种 |
+| `完全访问(-a never)` | 从终端启动 Codex 时追加 `--dangerously-bypass-approvals-and-sandbox`；新配置默认勾选 |
 | 标题栏 `GitHub` 右侧语言文字 | 在中文和英文界面之间切换 |
 | `软件配置文件` | 打开根目录 `codex-history-sync-config.json`；首次会自动生成，保存后 GUI 自动刷新 |
 | `帮助` | 显示加载codex账号、cc-switch.db、启动、更新等说明，并复制 Everything 搜索关键词 |
-| `检查更新` | 从 GitHub main 分支检查版本，发现新版后可一键热更新 |
+| `检查更新` | 从 GitHub main 分支检查版本；如果当前目录是干净的 Git checkout，会自动执行 `git pull --ff-only origin main` 同步 GitHub，否则继续使用 ZIP 热更新 |
 | `加载codex账号` | 手动选择包含 `state_5.sqlite` 的 `.codex` 文件夹 |
 | `打开聊天内容` | 打开当前选中聊天的 rollout 文件夹；未选中时打开 `.codex\sessions` |
 | `codex目录` | 打开当前 Codex 历史根目录 |
 | `加载cc-switch.db文件` | 手动选择 `cc-switch.db` 或同结构 `.db` 文件，让 GUI 读取 Any Router、RightCode 等启动供应商 |
-| `完全访问(-a never)` | 从终端启动 Codex 时追加 `-a never` |
-| 表格右键菜单 | 在表格中快速启动终端、启动终端并加载当前聊天、同步此条/勾选/所有记录、打开目录或复制信息 |
+| 表格右键菜单 | 在表格中快速启动终端、启动终端并加载当前聊天、同步此条至/同步勾选/同步全部、打开目录或复制信息 |
 
 如果你误选了 `sessions` 或它下面的子目录，工具会自动向上查找包含 `state_5.sqlite` 的父目录。
 
@@ -168,6 +168,8 @@ codex-history-sync.cmd mirror -Providers openai,custom
 1. GUI 会在根目录自动生成 `codex-history-sync-config.json`。
 2. 如果已经自动检测到 Codex 历史记录、cc-switch 节点或 Codex CLI，配置文件会自动写入这些路径和账号列表。
 3. 修改并保存配置文件后，GUI 会自动重新读取并刷新界面。
+4. 你在界面里改过的复选框、账号选择、显示条数、目录筛选和语言等偏好，会自动写回配置文件；如果保存失败，只会写入 GUI 日志，不会让软件闪退。
+5. 中文和英文界面的窗口宽度会分别记住，切换语言时恢复该语言上次使用的宽度。
 
 `codex-history-sync-config.template.json` 只是通用模板，适合发给别人参考；真实本机配置只写在 `codex-history-sync-config.json`。这个文件只适合保存本机路径和默认选项，不要写 API key 或 token。
 
@@ -215,6 +217,7 @@ GUI 里的 `弹窗提醒` 默认用于本地提醒。启用后，工具会：
 - 发现 `task_complete` 事件后弹出置顶提示并播放提示音；
 - 弹窗会尽量显示账号、完成的聊天和最近一条用户任务摘要。
 - 桌面版 Codex 直接调用 `notify` 时，工具也会尝试解析 Codex 传入的事件参数；参数不足时会从最近的本地 rollout 记录补账号、会话和任务摘要。
+- 如果检测到权限审批请求等待超过 10 秒，会弹出单独的橙色提醒。
 
 这个功能只读取本机 session 文件，不会把通知内容发送到外部服务。
 

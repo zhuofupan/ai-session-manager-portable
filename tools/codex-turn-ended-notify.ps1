@@ -6,7 +6,9 @@ param(
     [int]$Seconds = 12,
     [string]$ForwardBase64,
     [string]$CodexHome,
+    [string]$Kind = 'Complete',
     [switch]$ForwardOnly,
+    [string]$ArgFile,
     [switch]$SelfTest,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$RemainingArgs
@@ -14,14 +16,55 @@ param(
 
 $ErrorActionPreference = 'SilentlyContinue'
 $utf8 = New-Object System.Text.UTF8Encoding -ArgumentList $false
+$utf8Strict = New-Object System.Text.UTF8Encoding -ArgumentList $false, $true
 [Console]::InputEncoding = $utf8
 [Console]::OutputEncoding = $utf8
 $OutputEncoding = $utf8
+
+function Write-DiagnosticLog {
+    param([AllowNull()][string]$Text)
+
+    try {
+        $dir = if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) {
+            Join-Path $env:APPDATA 'codex-history-sync-portable'
+        }
+        else {
+            Join-Path ([System.IO.Path]::GetTempPath()) 'codex-history-sync-portable'
+        }
+        if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        }
+        $path = Join-Path $dir 'diagnostic.log'
+        $line = '[{0}] [notify] {1}{2}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff zzz'), ([string]$Text), [Environment]::NewLine
+        [System.IO.File]::AppendAllText($path, $line, $utf8)
+    }
+    catch {
+        return
+    }
+}
 
 function ConvertFrom-Utf8Base64 {
     param([Parameter(Mandatory)][string]$Value)
 
     return $utf8.GetString([Convert]::FromBase64String($Value))
+}
+
+function Repair-MojibakeText {
+    param([AllowNull()][string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $Value }
+    try {
+        $bytes = [System.Text.Encoding]::Default.GetBytes($Value)
+        $candidate = $utf8Strict.GetString($bytes)
+        if ([string]::IsNullOrWhiteSpace($candidate) -or $candidate -eq $Value) { return $Value }
+        if ($candidate -match '[\u4e00-\u9fff]' -and $candidate -notmatch [char]0xfffd) {
+            return $candidate
+        }
+    }
+    catch {
+        return $Value
+    }
+    return $Value
 }
 
 function Shorten-Text {
@@ -111,7 +154,17 @@ function Get-NotifyMessageFromJsonObject {
 function Get-NotifyMessageFromArgs {
     param([AllowNull()][string[]]$Args)
 
+    $candidates = New-Object System.Collections.Generic.List[string]
     foreach ($arg in @($Args)) {
+        if (-not [string]::IsNullOrWhiteSpace($arg)) {
+            $candidates.Add([string]$arg)
+        }
+    }
+    if ($candidates.Count -gt 1) {
+        $candidates.Add(($candidates.ToArray() -join ' '))
+    }
+
+    foreach ($arg in $candidates.ToArray()) {
         if ([string]::IsNullOrWhiteSpace($arg)) { continue }
         $text = $arg.Trim()
         if (-not ($text.StartsWith('{') -or $text.StartsWith('['))) { continue }
@@ -125,6 +178,94 @@ function Get-NotifyMessageFromArgs {
         }
     }
     return ''
+}
+
+function Read-ForwardedArgumentFile {
+    param([AllowNull()][string]$Path)
+
+    $values = New-Object System.Collections.Generic.List[string]
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $values.ToArray() }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $values.ToArray() }
+
+    try {
+        $raw = Get-Content -LiteralPath $Path -Raw -Encoding Unicode
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $values.ToArray() }
+
+        foreach ($item in @($raw | ConvertFrom-Json)) {
+            if ($null -ne $item) {
+                $values.Add([string]$item)
+            }
+        }
+        Write-DiagnosticLog ("loaded forwarded args count={0}" -f $values.Count)
+    }
+    catch {
+        Write-DiagnosticLog ("forwarded args load failed: " + $_.Exception.Message)
+    }
+    finally {
+        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    }
+
+    return $values.ToArray()
+}
+
+function Apply-ForwardedNotifyArguments {
+    param([AllowNull()][string[]]$Args)
+
+    $remaining = New-Object System.Collections.Generic.List[string]
+    $items = @($Args)
+    for ($i = 0; $i -lt $items.Count; $i++) {
+        $arg = [string]$items[$i]
+        $key = $arg.ToLowerInvariant()
+
+        switch ($key) {
+            { $_ -in @('-title', '--title') } {
+                if (($i + 1) -lt $items.Count) { $script:Title = [string]$items[++$i] }
+                continue
+            }
+            { $_ -in @('-message', '--message') } {
+                if (($i + 1) -lt $items.Count) { $script:Message = [string]$items[++$i] }
+                continue
+            }
+            { $_ -in @('-messagebase64', '--messagebase64') } {
+                if (($i + 1) -lt $items.Count) { $script:MessageBase64 = [string]$items[++$i] }
+                continue
+            }
+            { $_ -in @('-seconds', '--seconds') } {
+                if (($i + 1) -lt $items.Count) {
+                    $parsedSeconds = 0
+                    if ([int]::TryParse([string]$items[++$i], [ref]$parsedSeconds)) {
+                        $script:Seconds = $parsedSeconds
+                    }
+                }
+                continue
+            }
+            { $_ -in @('-forwardbase64', '--forwardbase64') } {
+                if (($i + 1) -lt $items.Count) { $script:ForwardBase64 = [string]$items[++$i] }
+                continue
+            }
+            { $_ -in @('-codexhome', '--codexhome') } {
+                if (($i + 1) -lt $items.Count) { $script:CodexHome = [string]$items[++$i] }
+                continue
+            }
+            { $_ -in @('-kind', '--kind') } {
+                if (($i + 1) -lt $items.Count) { $script:Kind = [string]$items[++$i] }
+                continue
+            }
+            { $_ -in @('-forwardonly', '--forwardonly') } {
+                $script:ForwardOnly = $true
+                continue
+            }
+            { $_ -in @('-selftest', '--selftest') } {
+                $script:SelfTest = $true
+                continue
+            }
+            default {
+                $remaining.Add($arg)
+            }
+        }
+    }
+
+    return $remaining.ToArray()
 }
 
 function Join-OptionalPath {
@@ -240,8 +381,8 @@ function Get-RolloutContextFromFile {
     $context = New-RolloutContext
     try {
         $lines = @()
-        $lines += @(Get-Content -LiteralPath $Path -TotalCount 80 -ErrorAction SilentlyContinue)
-        $lines += @(Get-Content -LiteralPath $Path -Tail 260 -ErrorAction SilentlyContinue)
+        $lines += @(Get-Content -LiteralPath $Path -TotalCount 80 -Encoding UTF8 -ErrorAction SilentlyContinue)
+        $lines += @(Get-Content -LiteralPath $Path -Tail 260 -Encoding UTF8 -ErrorAction SilentlyContinue)
         foreach ($line in $lines) {
             if ([string]::IsNullOrWhiteSpace($line)) { continue }
             try {
@@ -302,29 +443,43 @@ function Get-NotifyMessageFromRolloutContext {
 function Get-NotifyMessageFromLatestRollout {
     param([AllowNull()][string]$RequestedCodexHome)
 
-    $home = Resolve-CodexHome $RequestedCodexHome
-    if ([string]::IsNullOrWhiteSpace($home)) { return '' }
+    $resolvedCodexHome = Resolve-CodexHome $RequestedCodexHome
+    if ([string]::IsNullOrWhiteSpace($resolvedCodexHome)) {
+        Write-DiagnosticLog 'rollout fallback skipped: CodexHome not resolved.'
+        return ''
+    }
 
-    $sessionsDir = Join-Path $home 'sessions'
-    if (-not (Test-Path -LiteralPath $sessionsDir -PathType Container)) { return '' }
+    $sessionsDir = Join-Path $resolvedCodexHome 'sessions'
+    if (-not (Test-Path -LiteralPath $sessionsDir -PathType Container)) {
+        Write-DiagnosticLog "rollout fallback skipped: sessions dir not found '$sessionsDir'."
+        return ''
+    }
 
     $fallbackContext = $null
     try {
         $files = @(Get-ChildItem -LiteralPath $sessionsDir -Recurse -Filter 'rollout-*.jsonl' -File -ErrorAction SilentlyContinue |
             Sort-Object LastWriteTimeUtc -Descending |
             Select-Object -First 6)
+        Write-DiagnosticLog ("rollout fallback scanning files={0} home='{1}'." -f $files.Count, $resolvedCodexHome)
         foreach ($file in $files) {
             $context = Get-RolloutContextFromFile ([string]$file.FullName)
             if (-not $fallbackContext) { $fallbackContext = $context }
             if (Test-RolloutContextHasUsefulInfo $context) {
+                Write-DiagnosticLog ("rollout fallback selected file='{0}' provider='{1}' cwdSet={2} taskSet={3}." -f
+                    $file.Name,
+                    ([string]$context.Provider),
+                    (-not [string]::IsNullOrWhiteSpace([string]$context.Cwd)),
+                    (-not [string]::IsNullOrWhiteSpace([string]$context.LastUserTask)))
                 return (Get-NotifyMessageFromRolloutContext $context)
             }
         }
     }
     catch {
+        Write-DiagnosticLog ("rollout fallback failed: " + $_.Exception.Message)
         return ''
     }
 
+    Write-DiagnosticLog 'rollout fallback using fallback context.'
     return (Get-NotifyMessageFromRolloutContext $fallbackContext)
 }
 
@@ -333,6 +488,9 @@ function Test-NotifyMessageNeedsRolloutContext {
 
     if ([string]::IsNullOrWhiteSpace($Value)) { return $true }
     $clean = ($Value -replace '\s+', ' ').Trim()
+    if ($clean.IndexOf('turn-ended', [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        return $true
+    }
     if ([string]::Equals($clean, 'Codex', [System.StringComparison]::OrdinalIgnoreCase) -or
         $clean -match '^(?i:codex)\s+(?i:codex)$') {
         return $true
@@ -352,6 +510,16 @@ function Test-NotifyMessageNeedsRolloutContext {
     return $false
 }
 
+$forwardedArgs = @(Read-ForwardedArgumentFile $ArgFile)
+if ($forwardedArgs.Count -gt 0) {
+    $RemainingArgs = @(Apply-ForwardedNotifyArguments $forwardedArgs) + @($RemainingArgs)
+}
+
+if ($SelfTest) {
+    Write-Output 'Notifier SelfTest OK.'
+    return
+}
+
 if ([string]::IsNullOrWhiteSpace($Title)) {
     $Title = ConvertFrom-Utf8Base64 'Q29kZXgg5Lya6K+d5bey57uT5p2f'
 }
@@ -364,15 +532,30 @@ elseif ($RemainingArgs -and $RemainingArgs.Count -gt 0) {
         $Message = $argMessage
     }
 }
-if (Test-NotifyMessageNeedsRolloutContext $Message) {
+$needsRolloutContext = Test-NotifyMessageNeedsRolloutContext $Message
+if (-not $needsRolloutContext -and ([string]$Message).Length -le 32 -and @($RemainingArgs).Count -gt 0) {
+    $needsRolloutContext = $true
+}
+Write-DiagnosticLog ("message precheck length={0} needsRollout={1} remainingArgs={2} hasMessageBase64={3}" -f
+    ([string]$Message).Length,
+    [bool]$needsRolloutContext,
+    @($RemainingArgs).Count,
+    (-not [string]::IsNullOrWhiteSpace($MessageBase64)))
+if ($needsRolloutContext) {
+    Write-DiagnosticLog 'message needs rollout context.'
     $rolloutMessage = Get-NotifyMessageFromLatestRollout -RequestedCodexHome $CodexHome
     if (-not [string]::IsNullOrWhiteSpace($rolloutMessage)) {
         $Message = $rolloutMessage
+        Write-DiagnosticLog ("rollout context applied messageLength={0}." -f ([string]$Message).Length)
+    }
+    else {
+        Write-DiagnosticLog 'rollout context unavailable.'
     }
 }
 if ([string]::IsNullOrWhiteSpace($Message)) {
     $Message = ConvertFrom-Utf8Base64 'Q29kZXgg5bey5a6M5oiQ5b2T5YmN5Lya6K+d44CC'
 }
+$Message = Repair-MojibakeText $Message
 
 function Invoke-ForwardNotify {
     param(
@@ -409,13 +592,13 @@ function Invoke-ForwardNotify {
 
 function Test-ShouldSuppressDuplicateNotification {
     param(
-        [AllowNull()][string]$Home,
+        [AllowNull()][string]$RequestedHome,
         [AllowNull()][string]$NotificationMessage
     )
 
     try {
-        $resolvedHome = Resolve-CodexHome $Home
-        if ([string]::IsNullOrWhiteSpace($resolvedHome)) { $resolvedHome = [string]$Home }
+        $resolvedHome = Resolve-CodexHome $RequestedHome
+        if ([string]::IsNullOrWhiteSpace($resolvedHome)) { $resolvedHome = [string]$RequestedHome }
         $normalizedMessage = ([string]$NotificationMessage -replace '\s+', ' ').Trim()
         if ([string]::IsNullOrWhiteSpace($normalizedMessage)) { $normalizedMessage = [string]$Title }
 
@@ -459,18 +642,21 @@ function Test-ShouldSuppressDuplicateNotification {
     }
 }
 
-if ($SelfTest) {
-    Write-Output 'Notifier SelfTest OK.'
-    return
-}
-
+Write-DiagnosticLog ("start kind='{0}' forwardOnly={1} hasForward={2} remainingArgs={3} messageLength={4}" -f
+    $Kind,
+    [bool]$ForwardOnly,
+    (-not [string]::IsNullOrWhiteSpace($ForwardBase64)),
+    @($RemainingArgs).Count,
+    ([string]$Message).Length)
 Invoke-ForwardNotify -EncodedCommand $ForwardBase64 -ExtraArgs $RemainingArgs
 
 if ($ForwardOnly) {
+    Write-DiagnosticLog 'exit after forward only.'
     return
 }
 
-if (Test-ShouldSuppressDuplicateNotification -Home $CodexHome -NotificationMessage $Message) {
+if (Test-ShouldSuppressDuplicateNotification -RequestedHome $CodexHome -NotificationMessage $Message) {
+    Write-DiagnosticLog 'duplicate notification suppressed.'
     return
 }
 
@@ -507,13 +693,31 @@ public static class CodexNotifyNative {
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
+$isApprovalWait = [string]::Equals($Kind, 'ApprovalWait', [System.StringComparison]::OrdinalIgnoreCase)
+$accentColor = if ($isApprovalWait) {
+    [System.Drawing.Color]::FromArgb(245, 158, 11)
+}
+else {
+    [System.Drawing.Color]::FromArgb(34, 111, 245)
+}
+$iconText = if ($isApprovalWait) { '!' } else { 'OK' }
+$iconBackColor = $accentColor
+
 function Play-NotifySound {
     try {
-        [System.Media.SystemSounds]::Asterisk.Play()
-        Start-Sleep -Milliseconds 120
-        [System.Media.SystemSounds]::Exclamation.Play()
-        [Console]::Beep(880, 120)
-        [Console]::Beep(1175, 160)
+        if ($isApprovalWait) {
+            [System.Media.SystemSounds]::Exclamation.Play()
+            Start-Sleep -Milliseconds 120
+            [Console]::Beep(740, 140)
+            [Console]::Beep(740, 140)
+        }
+        else {
+            [System.Media.SystemSounds]::Asterisk.Play()
+            Start-Sleep -Milliseconds 120
+            [System.Media.SystemSounds]::Exclamation.Play()
+            [Console]::Beep(880, 120)
+            [Console]::Beep(1175, 160)
+        }
     }
     catch {
         try { [System.Media.SystemSounds]::Exclamation.Play() } catch { return }
@@ -538,17 +742,17 @@ $form.BackColor = [System.Drawing.Color]::White
 $accentPanel = New-Object System.Windows.Forms.Panel
 $accentPanel.Location = New-Object System.Drawing.Point(0, 0)
 $accentPanel.Size = New-Object System.Drawing.Size(7, $height)
-$accentPanel.BackColor = [System.Drawing.Color]::FromArgb(34, 111, 245)
+$accentPanel.BackColor = $accentColor
 $form.Controls.Add($accentPanel)
 
 $iconPanel = New-Object System.Windows.Forms.Panel
 $iconPanel.Location = New-Object System.Drawing.Point(22, 22)
 $iconPanel.Size = New-Object System.Drawing.Size(44, 44)
-$iconPanel.BackColor = [System.Drawing.Color]::FromArgb(34, 111, 245)
+$iconPanel.BackColor = $iconBackColor
 $form.Controls.Add($iconPanel)
 
 $iconLabel = New-Object System.Windows.Forms.Label
-$iconLabel.Text = 'OK'
+$iconLabel.Text = $iconText
 $iconLabel.ForeColor = [System.Drawing.Color]::White
 $iconLabel.Font = New-Object System.Drawing.Font('Segoe UI', 11, [System.Drawing.FontStyle]::Bold)
 $iconLabel.Location = New-Object System.Drawing.Point(0, 0)
@@ -592,7 +796,7 @@ $closeButton.Location = New-Object System.Drawing.Point(($width - 98), 116)
 $closeButton.Size = New-Object System.Drawing.Size(78, 26)
 $closeButton.FlatStyle = 'Flat'
 $closeButton.FlatAppearance.BorderSize = 0
-$closeButton.BackColor = [System.Drawing.Color]::FromArgb(34, 111, 245)
+$closeButton.BackColor = $accentColor
 $closeButton.ForeColor = [System.Drawing.Color]::White
 $closeButton.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9.5)
 $closeButton.Add_Click({ $form.Close() })
@@ -639,6 +843,7 @@ $soundTimer.Add_Tick({
     })
 
 $form.Add_Shown({
+        Write-DiagnosticLog ("form shown title='{0}' kind='{1}' seconds={2}" -f $Title, $Kind, $Seconds)
         $region = [CodexNotifyNative]::CreateRoundRectRgn(0, 0, $form.Width + 1, $form.Height + 1, 14, 14)
         [void][CodexNotifyNative]::SetWindowRgn($form.Handle, $region, $true)
         $form.Refresh()
@@ -665,6 +870,7 @@ $form.Add_Shown({
     })
 
 $form.Add_FormClosed({
+        Write-DiagnosticLog ("form closed title='{0}' kind='{1}'" -f $Title, $Kind)
         $keepTopTimer.Stop()
         $closeTimer.Stop()
         $soundTimer.Stop()

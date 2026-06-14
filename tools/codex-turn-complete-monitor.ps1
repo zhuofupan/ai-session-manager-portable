@@ -4,6 +4,7 @@ param(
     [string]$NotifierPath,
     [int]$PollSeconds = 1,
     [int]$Seconds = 12,
+    [int]$ApprovalWaitSeconds = 10,
     [switch]$SelfTest
 )
 
@@ -12,6 +13,28 @@ $utf8 = New-Object System.Text.UTF8Encoding -ArgumentList $false
 [Console]::InputEncoding = $utf8
 [Console]::OutputEncoding = $utf8
 $OutputEncoding = $utf8
+
+function Write-DiagnosticLog {
+    param([AllowNull()][string]$Text)
+
+    try {
+        $dir = if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) {
+            Join-Path $env:APPDATA 'codex-history-sync-portable'
+        }
+        else {
+            Join-Path ([System.IO.Path]::GetTempPath()) 'codex-history-sync-portable'
+        }
+        if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        }
+        $path = Join-Path $dir 'diagnostic.log'
+        $line = '[{0}] [monitor] {1}{2}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff zzz'), ([string]$Text), [Environment]::NewLine
+        [System.IO.File]::AppendAllText($path, $line, $utf8)
+    }
+    catch {
+        return
+    }
+}
 
 function ConvertFrom-Utf8Base64 {
     param([Parameter(Mandatory)][string]$Value)
@@ -72,13 +95,18 @@ $hashBytes = $sha.ComputeHash($utf8.GetBytes($script:CodexHome.ToLowerInvariant(
 $hash = ([BitConverter]::ToString($hashBytes) -replace '-', '').Substring(0, 16)
 $createdNew = $false
 $mutex = New-Object System.Threading.Mutex($true, "Local\CodexTurnCompleteMonitor_$hash", [ref]$createdNew)
-if (-not $createdNew) { return }
+if (-not $createdNew) {
+    Write-DiagnosticLog "monitor already running for CodexHome='$script:CodexHome'; exiting duplicate."
+    return
+}
 
 $script:MonitorStartedAt = [DateTimeOffset]::UtcNow
 $script:Offsets = @{}
 $script:Buffers = @{}
 $script:Contexts = @{}
 $script:SeenTurns = New-Object 'System.Collections.Generic.HashSet[string]'
+$script:PendingApprovals = @{}
+Write-DiagnosticLog "monitor started CodexHome='$script:CodexHome' sessions='$script:SessionsDir' pollSeconds=$PollSeconds."
 
 function Shorten-Text {
     param(
@@ -97,6 +125,34 @@ function ConvertTo-Utf8Base64 {
 
     if ($null -eq $Value) { $Value = '' }
     return [Convert]::ToBase64String($utf8.GetBytes($Value))
+}
+
+function Get-ObjectStringProperty {
+    param(
+        [AllowNull()]$Object,
+        [Parameter(Mandatory)][string[]]$Names
+    )
+
+    if ($null -eq $Object) { return '' }
+    foreach ($name in $Names) {
+        $property = $Object.PSObject.Properties[$name]
+        if ($property -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+            return [string]$property.Value
+        }
+    }
+    return ''
+}
+
+function Get-ObjectSearchText {
+    param([AllowNull()]$Object)
+
+    if ($null -eq $Object) { return '' }
+    try {
+        return ($Object | ConvertTo-Json -Depth 16 -Compress)
+    }
+    catch {
+        return ([string]$Object)
+    }
 }
 
 function Get-ContextForFile {
@@ -188,8 +244,8 @@ function Initialize-RolloutContext {
     [void](Get-ContextForFile $Path)
     try {
         $lines = @()
-        $lines += @(Get-Content -LiteralPath $Path -TotalCount 80 -ErrorAction SilentlyContinue)
-        $lines += @(Get-Content -LiteralPath $Path -Tail 240 -ErrorAction SilentlyContinue)
+        $lines += @(Get-Content -LiteralPath $Path -TotalCount 80 -Encoding UTF8 -ErrorAction SilentlyContinue)
+        $lines += @(Get-Content -LiteralPath $Path -Tail 240 -Encoding UTF8 -ErrorAction SilentlyContinue)
         foreach ($line in $lines) {
             if ([string]::IsNullOrWhiteSpace($line)) { continue }
             try {
@@ -250,22 +306,7 @@ function Invoke-CompletionPopup {
 
     $message = "$accountLabel$provider | $cwdLabel`r`n$threadLabelPrefix$threadLabel`r`n$taskLabel$task"
     $messageBase64 = ConvertTo-Utf8Base64 $message
-
-    if (-not [string]::IsNullOrWhiteSpace($NotifierLauncherPath) -and
-        (Test-Path -LiteralPath $NotifierLauncherPath)) {
-        Start-Process -FilePath wscript.exe -ArgumentList @(
-            $NotifierLauncherPath,
-            '-Title',
-            $title,
-            '-CodexHome',
-            $script:CodexHome,
-            '-MessageBase64',
-            $messageBase64,
-            '-Seconds',
-            ([string]$Seconds)
-        ) -WindowStyle Hidden | Out-Null
-        return
-    }
+    Write-DiagnosticLog ("completion popup requested provider='{0}' thread='{1}' task='{2}'" -f $provider, $threadLabel, $task)
 
     if (-not [string]::IsNullOrWhiteSpace($NotifierPath) -and
         (Test-Path -LiteralPath $NotifierPath)) {
@@ -287,6 +328,218 @@ function Invoke-CompletionPopup {
             '-Seconds',
             ([string]$Seconds)
         ) -WindowStyle Hidden | Out-Null
+        Write-DiagnosticLog "completion popup launched via powershell '$NotifierPath'."
+        return
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($NotifierLauncherPath) -and
+        (Test-Path -LiteralPath $NotifierLauncherPath)) {
+        Start-Process -FilePath wscript.exe -ArgumentList @(
+            $NotifierLauncherPath,
+            '-Title',
+            $title,
+            '-CodexHome',
+            $script:CodexHome,
+            '-MessageBase64',
+            $messageBase64,
+            '-Seconds',
+            ([string]$Seconds)
+        ) -WindowStyle Hidden | Out-Null
+        Write-DiagnosticLog "completion popup launched via wscript '$NotifierLauncherPath'."
+    }
+}
+
+function Get-ApprovalEventInfo {
+    param(
+        [Parameter(Mandatory)]$Object,
+        [Parameter(Mandatory)][string]$Path
+    )
+
+    try {
+        $eventTime = [DateTimeOffset]::UtcNow
+        if (-not [string]::IsNullOrWhiteSpace([string]$Object.timestamp)) {
+            $eventTime = [DateTimeOffset]::Parse([string]$Object.timestamp)
+        }
+        if ($eventTime -lt $script:MonitorStartedAt.AddSeconds(-2)) { return $null }
+
+        $payload = $Object.payload
+        $typeText = @(
+            [string]$Object.type,
+            [string]$payload.type,
+            [string]$payload.subtype,
+            [string]$payload.status,
+            [string]$payload.state
+        ) -join ' '
+        $searchText = (($typeText + ' ' + (Get-ObjectSearchText $Object))).ToLowerInvariant()
+
+        $isRequest = (
+            ($searchText -match 'approval|permission|sandbox|escalat') -and
+            ($searchText -match 'request|pending|wait|waiting|prompt|required|requires|ask')
+        )
+        $isResolved = (
+            ($searchText -match 'approval|permission|sandbox|escalat') -and
+            ($searchText -match 'approved|denied|reject|rejected|cancel|cancelled|canceled|granted|resolved|response|decision|completed')
+        )
+        if ([string]$Object.type -eq 'event_msg' -and [string]$payload.type -eq 'task_complete') {
+            $isResolved = $true
+        }
+        if ([string]$payload.type -match 'exec_command_begin|exec_command_end|command_begin|command_started|tool_call_begin') {
+            $isResolved = $true
+        }
+
+        if (-not $isRequest -and -not $isResolved) { return $null }
+
+        $id = Get-ObjectStringProperty $payload @(
+            'approval_id',
+            'approvalId',
+            'request_id',
+            'requestId',
+            'call_id',
+            'callId',
+            'command_id',
+            'commandId',
+            'id',
+            'turn_id',
+            'turnId'
+        )
+        if ([string]::IsNullOrWhiteSpace($id)) {
+            $id = Get-ObjectStringProperty $Object @('id', 'event_id', 'eventId', 'turn_id', 'turnId')
+        }
+        if ([string]::IsNullOrWhiteSpace($id)) {
+            $id = [string]$Path
+        }
+
+        $summary = Get-ObjectStringProperty $payload @('command', 'cmd', 'tool_name', 'toolName', 'name', 'description', 'reason')
+        if ([string]::IsNullOrWhiteSpace($summary)) {
+            $summary = Shorten-Text (Get-ObjectSearchText $payload) 72
+        }
+
+        return [pscustomobject]@{
+            Key       = "$Path|$id"
+            Path      = $Path
+            IsRequest = [bool]$isRequest
+            IsResolved = [bool]$isResolved
+            StartedAt = $eventTime.UtcDateTime
+            Summary   = $summary
+        }
+    }
+    catch {
+        return $null
+    }
+}
+
+function Register-ApprovalEvent {
+    param(
+        [Parameter(Mandatory)]$Info,
+        [AllowNull()]$Context
+    )
+
+    if ($Info.IsResolved) {
+        if ($script:PendingApprovals.ContainsKey($Info.Key)) {
+            $script:PendingApprovals.Remove($Info.Key)
+        }
+        foreach ($key in @($script:PendingApprovals.Keys)) {
+            if ($key.StartsWith("$($Info.Path)|", [System.StringComparison]::OrdinalIgnoreCase)) {
+                $script:PendingApprovals.Remove($key)
+            }
+        }
+        return
+    }
+
+    if (-not $Info.IsRequest) { return }
+    if ($script:PendingApprovals.ContainsKey($Info.Key)) { return }
+
+    $script:PendingApprovals[$Info.Key] = [pscustomobject]@{
+        Key       = [string]$Info.Key
+        Path      = [string]$Info.Path
+        StartedAt = [datetime]$Info.StartedAt
+        Summary   = [string]$Info.Summary
+        Context   = $Context
+        Notified  = $false
+    }
+}
+
+function Invoke-ApprovalWaitPopup {
+    param([Parameter(Mandatory)]$Pending)
+
+    $context = $Pending.Context
+    if (-not $context) {
+        $context = Get-ContextForFile ([string]$Pending.Path)
+    }
+
+    $title = 'Codex 等待权限审批'
+    $cwd = [string]$context.Cwd
+    $cwdLabel = if (-not [string]::IsNullOrWhiteSpace($cwd)) { Split-Path -Leaf $cwd } else { '未知目录' }
+    if ([string]::IsNullOrWhiteSpace($cwdLabel)) { $cwdLabel = Shorten-Text $cwd 24 }
+    $provider = Shorten-Text ([string]$context.Provider) 18
+    if ([string]::IsNullOrWhiteSpace($provider)) { $provider = '未知账号' }
+    $thread = [string]$context.ThreadId
+    if ($thread.Length -gt 8) { $thread = $thread.Substring(0, 8) }
+    if ([string]::IsNullOrWhiteSpace($thread)) { $thread = '当前会话' }
+
+    $age = [Math]::Max(0, [int](([DateTime]::UtcNow - [datetime]$Pending.StartedAt).TotalSeconds))
+    $summary = Shorten-Text ([string]$Pending.Summary) 54
+    if ([string]::IsNullOrWhiteSpace($summary)) { $summary = '权限审批请求' }
+    $message = "账号：$provider | $cwdLabel`r`n聊天：$thread`r`n已等待审批 ${age}s：$summary"
+    $messageBase64 = ConvertTo-Utf8Base64 $message
+
+    if (-not [string]::IsNullOrWhiteSpace($NotifierPath) -and
+        (Test-Path -LiteralPath $NotifierPath)) {
+        Start-Process -FilePath powershell.exe -ArgumentList @(
+            '-NoProfile',
+            '-STA',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-WindowStyle',
+            'Hidden',
+            '-File',
+            $NotifierPath,
+            '-Title',
+            $title,
+            '-Kind',
+            'ApprovalWait',
+            '-CodexHome',
+            $script:CodexHome,
+            '-MessageBase64',
+            $messageBase64,
+            '-Seconds',
+            ([string]$Seconds)
+        ) -WindowStyle Hidden | Out-Null
+        return
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($NotifierLauncherPath) -and
+        (Test-Path -LiteralPath $NotifierLauncherPath)) {
+        Start-Process -FilePath wscript.exe -ArgumentList @(
+            $NotifierLauncherPath,
+            '-Title',
+            $title,
+            '-Kind',
+            'ApprovalWait',
+            '-CodexHome',
+            $script:CodexHome,
+            '-MessageBase64',
+            $messageBase64,
+            '-Seconds',
+            ([string]$Seconds)
+        ) -WindowStyle Hidden | Out-Null
+    }
+}
+
+function Check-PendingApprovalPopups {
+    $thresholdSeconds = [Math]::Max(1, $ApprovalWaitSeconds)
+    $now = [DateTime]::UtcNow
+    foreach ($key in @($script:PendingApprovals.Keys)) {
+        $pending = $script:PendingApprovals[$key]
+        $ageSeconds = ($now - [datetime]$pending.StartedAt).TotalSeconds
+        if ($ageSeconds -gt 600) {
+            $script:PendingApprovals.Remove($key)
+            continue
+        }
+        if (-not [bool]$pending.Notified -and $ageSeconds -ge $thresholdSeconds) {
+            Invoke-ApprovalWaitPopup -Pending $pending
+            $pending.Notified = $true
+        }
     }
 }
 
@@ -386,8 +639,18 @@ function Process-RolloutFile {
             continue
         }
         Update-RolloutContext -Path $path -Object $obj
+        $approvalInfo = Get-ApprovalEventInfo -Object $obj -Path $path
+        if ($approvalInfo) {
+            Register-ApprovalEvent -Info $approvalInfo -Context (Get-ContextForFile $path)
+        }
         $taskCompleteKey = Get-TaskCompleteKey $obj
         if (-not [string]::IsNullOrWhiteSpace($taskCompleteKey) -and $script:SeenTurns.Add($taskCompleteKey)) {
+            Write-DiagnosticLog "task_complete detected turn='$taskCompleteKey' path='$path'."
+            foreach ($key in @($script:PendingApprovals.Keys)) {
+                if ($key.StartsWith("$path|", [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $script:PendingApprovals.Remove($key)
+                }
+            }
             Invoke-CompletionPopup -Context (Get-ContextForFile $path)
         }
     }
@@ -399,6 +662,7 @@ try {
         foreach ($file in Get-RolloutFiles) {
             Process-RolloutFile $file
         }
+        Check-PendingApprovalPopups
         Start-Sleep -Seconds ([Math]::Max(1, $PollSeconds))
     }
 }
