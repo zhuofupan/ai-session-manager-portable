@@ -33,7 +33,7 @@ public static class CodexHistorySyncWindow {
 [System.Windows.Forms.Application]::EnableVisualStyles()
 [System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException)
 
-$script:AppVersion = '2026.06.14.04'
+$script:AppVersion = '2026.06.14.05'
 $script:AppAuthor = 'Joff Pan'
 $script:GitHubRepo = 'zhuofupan/codex-history-sync-portable'
 $script:GitHubUrl = "https://github.com/$script:GitHubRepo"
@@ -3289,6 +3289,156 @@ function Get-CodexConfigStringValue {
     return $match.Groups[1].Value
 }
 
+function ConvertFrom-Base64UrlUtf8 {
+    param([AllowNull()][string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
+    $text = $Value.Trim().Replace('-', '+').Replace('_', '/')
+    while (($text.Length % 4) -ne 0) { $text += '=' }
+    return [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($text))
+}
+
+function Get-OpenAiAuthClaimsFromIdToken {
+    param([AllowNull()][string]$IdToken)
+
+    if ([string]::IsNullOrWhiteSpace($IdToken)) { return $null }
+    $parts = $IdToken.Split('.')
+    if ($parts.Count -lt 2) { return $null }
+    try {
+        return (ConvertFrom-Base64UrlUtf8 $parts[1] | ConvertFrom-Json)
+    }
+    catch {
+        return $null
+    }
+}
+
+function Get-OpenAiPlanTypeFromClaims {
+    param([AllowNull()]$Claims)
+
+    if ($null -eq $Claims) { return '' }
+    foreach ($name in @('plan_type', 'planType', 'chatgpt_plan_type', 'chatgptPlanType')) {
+        $property = $Claims.PSObject.Properties[$name]
+        if ($property -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+            return [string]$property.Value
+        }
+    }
+
+    $authClaim = $null
+    $authProperty = $Claims.PSObject.Properties['https://api.openai.com/auth']
+    if ($authProperty) { $authClaim = $authProperty.Value }
+    if ($null -eq $authClaim) { return '' }
+
+    foreach ($name in @('plan_type', 'planType', 'chatgpt_plan_type', 'chatgptPlanType')) {
+        $property = $authClaim.PSObject.Properties[$name]
+        if ($property -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+            return [string]$property.Value
+        }
+    }
+    return ''
+}
+
+function Set-JsonObjectStringProperty {
+    param(
+        [Parameter(Mandatory)]$Object,
+        [Parameter(Mandatory)][string]$Name,
+        [AllowNull()][string]$Value
+    )
+
+    $property = $Object.PSObject.Properties[$Name]
+    if ($property) {
+        $property.Value = [string]$Value
+    }
+    else {
+        $Object | Add-Member -NotePropertyName $Name -NotePropertyValue ([string]$Value)
+    }
+}
+
+function Repair-CodexChatGptAuthMetadata {
+    param([AllowNull()]$Auth)
+
+    if ($null -eq $Auth) {
+        return [pscustomobject]@{ Auth = $Auth; Changed = $false; Valid = $false; Missing = 'auth' }
+    }
+    if (-not [string]::Equals([string]$Auth.auth_mode, 'chatgpt', [System.StringComparison]::OrdinalIgnoreCase)) {
+        return [pscustomobject]@{ Auth = $Auth; Changed = $false; Valid = $true; Missing = '' }
+    }
+
+    $changed = $false
+    $email = [string]$Auth.email
+    $planType = [string]$Auth.plan_type
+    if ([string]::IsNullOrWhiteSpace($email) -or [string]::IsNullOrWhiteSpace($planType)) {
+        $claims = Get-OpenAiAuthClaimsFromIdToken ([string]$Auth.tokens.id_token)
+        if ([string]::IsNullOrWhiteSpace($email) -and
+            $claims -and -not [string]::IsNullOrWhiteSpace([string]$claims.email)) {
+            $email = [string]$claims.email
+            Set-JsonObjectStringProperty -Object $Auth -Name 'email' -Value $email
+            $changed = $true
+        }
+
+        if ([string]::IsNullOrWhiteSpace($planType)) {
+            $planType = Get-OpenAiPlanTypeFromClaims $claims
+            if (-not [string]::IsNullOrWhiteSpace($planType)) {
+                Set-JsonObjectStringProperty -Object $Auth -Name 'plan_type' -Value $planType
+                $changed = $true
+            }
+        }
+    }
+
+    $missing = New-Object System.Collections.Generic.List[string]
+    if ([string]::IsNullOrWhiteSpace([string]$Auth.email)) { $missing.Add('email') }
+    if ([string]::IsNullOrWhiteSpace([string]$Auth.plan_type)) { $missing.Add('plan_type') }
+    return [pscustomobject]@{
+        Auth    = $Auth
+        Changed = $changed
+        Valid   = ($missing.Count -eq 0)
+        Missing = ($missing.ToArray() -join ', ')
+    }
+}
+
+function Repair-CodexProviderSettingsAuth {
+    param(
+        [Parameter(Mandatory)]$Provider,
+        [Parameter(Mandatory)]$Settings
+    )
+
+    if (-not (Test-CcSwitchOfficialProvider $Provider)) {
+        return [pscustomobject]@{ Settings = $Settings; Changed = $false }
+    }
+
+    $repair = Repair-CodexChatGptAuthMetadata $Settings.auth
+    if (-not [bool]$repair.Valid) {
+        throw "OpenAI Official 的 ChatGPT 登录信息不完整，缺少 $($repair.Missing)。请先运行 codex login 或在 cc-switch 中重新保存 OpenAI Official 后再启动。已阻止写入无效 auth.json。"
+    }
+
+    if ([bool]$repair.Changed) {
+        $Settings.auth = $repair.Auth
+        Append-Log '已从 OpenAI id_token 自动补齐 OpenAI Official 的 email/plan_type 登录元数据。'
+        Write-DiagnosticLog 'Repaired OpenAI Official auth metadata from id_token claims.'
+    }
+    return [pscustomobject]@{ Settings = $Settings; Changed = [bool]$repair.Changed }
+}
+
+function Update-CcSwitchProviderSettingsConfig {
+    param(
+        [Parameter(Mandatory)][string]$ProviderId,
+        [Parameter(Mandatory)]$Settings
+    )
+
+    if ([string]::IsNullOrWhiteSpace($script:CcSwitchDb) -or -not (Test-Path -LiteralPath $script:CcSwitchDb -PathType Leaf)) {
+        return
+    }
+    $settingsJson = $Settings | ConvertTo-Json -Depth 100 -Compress
+    $idSql = Quote-Sql $ProviderId
+    $settingsSql = Quote-Sql $settingsJson
+    $sql = "update providers set settings_config = $settingsSql where app_type='codex' and id=$idSql;"
+    $output = @('.timeout 5000', $sql) | & $script:Sqlite -batch $script:CcSwitchDb 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $message = (($output | ForEach-Object { [string]$_ }) -join ' ').Trim()
+        if ([string]::IsNullOrWhiteSpace($message)) { $message = "sqlite3 exit code $LASTEXITCODE" }
+        throw "更新 cc-switch OpenAI Official 登录元数据失败：$message"
+    }
+}
+
 function Get-CodexModelProviderNameFromConfig {
     param(
         [AllowNull()][string]$Config,
@@ -4011,6 +4161,8 @@ function Switch-CodexProviderRow {
     if (-not $settings) {
         throw "provider '$($provider.name)' 的 settings_config 无法解析。"
     }
+    $settingsRepair = Repair-CodexProviderSettingsAuth -Provider $provider -Settings $settings
+    $settings = $settingsRepair.Settings
 
     $backupDir = Backup-ProviderSwitchFiles ([string]$provider.id)
 
@@ -4029,6 +4181,15 @@ function Switch-CodexProviderRow {
     [System.IO.File]::WriteAllText($configPath, $configText, $script:Utf8NoBom)
     if (-not [string]::IsNullOrWhiteSpace($script:LastCodexConfigFix)) {
         Append-Log $script:LastCodexConfigFix
+    }
+    if ([bool]$settingsRepair.Changed) {
+        try {
+            Update-CcSwitchProviderSettingsConfig -ProviderId ([string]$provider.id) -Settings $settings
+            Append-Log '已同步修复后的 OpenAI Official 登录元数据到 cc-switch.db。'
+        }
+        catch {
+            Append-Log "已修复本次启动的 OpenAI 登录元数据，但写回 cc-switch.db 失败：$($_.Exception.Message)"
+        }
     }
 
     if (-not [string]::IsNullOrWhiteSpace($script:CcSwitchSettingsPath) -and
