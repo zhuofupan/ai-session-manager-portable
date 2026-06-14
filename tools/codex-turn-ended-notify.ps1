@@ -763,6 +763,100 @@ function Get-RolloutCompletionContextNearAnchor {
     return $null
 }
 
+function Get-RolloutLatestCompletionCandidates {
+    param(
+        [AllowNull()][object[]]$Events,
+        [Parameter(Mandatory)][datetime]$AnchorUtc,
+        [int]$FutureGraceSeconds = 45
+    )
+
+    $items = New-Object System.Collections.Generic.List[object]
+    foreach ($event in @($Events)) {
+        $obj = $event.Object
+        if (-not (Test-RolloutTaskCompleteObject $obj)) { continue }
+        $completedAt = $event.TimeUtc
+        if ($null -eq $completedAt) { continue }
+        $ageSeconds = ($AnchorUtc - [DateTime]$completedAt).TotalSeconds
+        if ($ageSeconds -lt (-1 * [int]$FutureGraceSeconds)) {
+            continue
+        }
+        $items.Add([pscustomobject]@{
+                EventIndex      = [int]$event.EventIndex
+                Object          = $obj
+                CompletedAtUtc  = [DateTime]$completedAt
+                AgeSeconds      = [double]$ageSeconds
+                DistanceSeconds = [double][Math]::Abs($ageSeconds)
+                TurnId          = Get-RolloutTurnId $obj
+            })
+    }
+    return $items.ToArray()
+}
+
+function Get-RolloutLatestCompletionContext {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][datetime]$AnchorUtc,
+        [int]$FutureGraceSeconds = 45,
+        [switch]$Fast
+    )
+
+    $metadata = Get-RolloutMetadataContextFromFile -Path $Path
+    $fileInfo = Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue
+    if ($null -eq $fileInfo) { return $null }
+
+    $byteWindows = @(1048576, 4194304, 16777216, 67108864)
+    $lastCandidate = $null
+    $lastEffectiveBytes = [int64]0
+    foreach ($window in $byteWindows) {
+        $effectiveBytes = [Math]::Min([int64]$window, [int64]$fileInfo.Length)
+        $isFullFile = ($effectiveBytes -ge [int64]$fileInfo.Length)
+        $isLastWindow = ($window -eq $byteWindows[$byteWindows.Count - 1])
+
+        $lines = @(Get-RolloutTailLinesFast -Path $Path -MaxBytes $window -MaxLines 20000)
+        $events = @(ConvertTo-RolloutEventRecords -Lines $lines)
+        $candidates = @(Get-RolloutLatestCompletionCandidates -Events $events -AnchorUtc $AnchorUtc -FutureGraceSeconds $FutureGraceSeconds |
+            Sort-Object `
+                @{ Expression = { $_.CompletedAtUtc }; Descending = $true }, `
+                @{ Expression = { $_.EventIndex }; Descending = $true })
+        if ($candidates.Count -eq 0) {
+            if ($Fast -or $isFullFile -or $isLastWindow) { break }
+            continue
+        }
+
+        $candidate = $candidates[0]
+        $lastCandidate = $candidate
+        $lastEffectiveBytes = [int64]$effectiveBytes
+        $taskText = Find-RolloutUserTaskBeforeEvent -Events $events -EventIndex ([int]$candidate.EventIndex)
+        if ($Fast -or -not [string]::IsNullOrWhiteSpace($taskText) -or $isFullFile -or $isLastWindow) {
+            $context = Copy-RolloutMetadataContext $metadata
+            $context.HasCompletedTurn = $true
+            $context.CompletedTurnId = [string]$candidate.TurnId
+            $context.CompletedAtUtc = [DateTime]$candidate.CompletedAtUtc
+            $context.LastUserTask = [string]$taskText
+            $context | Add-Member -NotePropertyName CompletionAgeSeconds -NotePropertyValue ([double]$candidate.AgeSeconds) -Force
+            $context | Add-Member -NotePropertyName CompletionDistanceSeconds -NotePropertyValue ([double]$candidate.DistanceSeconds) -Force
+            $context | Add-Member -NotePropertyName CompletionScanBytes -NotePropertyValue ([int64]$effectiveBytes) -Force
+            $context | Add-Member -NotePropertyName CompletionTaskFound -NotePropertyValue (-not [string]::IsNullOrWhiteSpace($taskText)) -Force
+            return $context
+        }
+    }
+
+    if ($null -ne $lastCandidate) {
+        $context = Copy-RolloutMetadataContext $metadata
+        $context.HasCompletedTurn = $true
+        $context.CompletedTurnId = [string]$lastCandidate.TurnId
+        $context.CompletedAtUtc = [DateTime]$lastCandidate.CompletedAtUtc
+        $context.LastUserTask = ''
+        $context | Add-Member -NotePropertyName CompletionAgeSeconds -NotePropertyValue ([double]$lastCandidate.AgeSeconds) -Force
+        $context | Add-Member -NotePropertyName CompletionDistanceSeconds -NotePropertyValue ([double]$lastCandidate.DistanceSeconds) -Force
+        $context | Add-Member -NotePropertyName CompletionScanBytes -NotePropertyValue ([int64]$lastEffectiveBytes) -Force
+        $context | Add-Member -NotePropertyName CompletionTaskFound -NotePropertyValue $false -Force
+        return $context
+    }
+
+    return $null
+}
+
 function Test-RolloutContextHasUsefulInfo {
     param([AllowNull()]$Context)
 
@@ -828,31 +922,35 @@ function Get-NotifyMessageFromLatestRollout {
         return ''
     }
 
-    $maxPastSeconds = 300
     $futureGraceSeconds = 45
     $fallbackContext = $null
     try {
         for ($attempt = 1; $attempt -le 2; $attempt++) {
-            $completedCandidates = New-Object System.Collections.Generic.List[object]
+            $bestCandidate = $null
+            $scannedCount = 0
             $files = @(Get-ChildItem -LiteralPath $sessionsDir -Recurse -Filter 'rollout-*.jsonl' -File -ErrorAction SilentlyContinue |
                 Sort-Object LastWriteTimeUtc -Descending |
-                Select-Object -First 6)
-            Write-DiagnosticLog ("rollout fallback precise scan attempt={0} files={1} home='{2}' anchor='{3}' past={4}s future={5}s." -f
+                Select-Object -First 24)
+            Write-DiagnosticLog ("rollout fallback latest completion scan attempt={0} files={1} home='{2}' anchor='{3}' future={4}s." -f
                 $attempt,
                 $files.Count,
                 $resolvedCodexHome,
                 $AnchorUtc.ToString('o'),
-                $maxPastSeconds,
                 $futureGraceSeconds)
 
             foreach ($file in $files) {
-                if ($file.LastWriteTimeUtc -lt $AnchorUtc.AddSeconds(-1 * ($maxPastSeconds + 120))) {
-                    Write-DiagnosticLog ("rollout fallback stopped by file age before file='{0}' lastWrite='{1}'." -f
+                if ($bestCandidate -and
+                    $bestCandidate.CompletedAtUtc -and
+                    $file.LastWriteTimeUtc -lt ([DateTime]$bestCandidate.CompletedAtUtc)) {
+                    Write-DiagnosticLog ("rollout fallback stopped after {0} files; next file='{1}' lastWrite='{2}' is older than best completion='{3}'." -f
+                        $scannedCount,
                         $file.Name,
-                        $file.LastWriteTimeUtc.ToString('o'))
+                        $file.LastWriteTimeUtc.ToString('o'),
+                        ([DateTime]$bestCandidate.CompletedAtUtc).ToString('o'))
                     break
                 }
 
+                $scannedCount++
                 if (-not $fallbackContext) {
                     $metadataContext = Get-RolloutMetadataContextFromFile ([string]$file.FullName)
                     if (Test-RolloutContextHasUsefulInfo $metadataContext) {
@@ -860,36 +958,41 @@ function Get-NotifyMessageFromLatestRollout {
                     }
                 }
 
-                $context = Get-RolloutCompletionContextNearAnchor `
+                $context = Get-RolloutLatestCompletionContext `
                     -Path ([string]$file.FullName) `
                     -AnchorUtc $AnchorUtc `
-                    -MaxPastSeconds $maxPastSeconds `
-                    -FutureGraceSeconds $futureGraceSeconds
+                    -FutureGraceSeconds $futureGraceSeconds `
+                    -Fast
                 if ($null -eq $context) { continue }
 
-                $completedCandidates.Add([pscustomobject]@{
+                $candidate = [pscustomobject]@{
                         File                    = $file
                         Context                 = $context
                         CompletedAtUtc          = $context.CompletedAtUtc
                         CompletionDistance      = [double]$context.CompletionDistanceSeconds
-                    })
+                }
+                if ($null -eq $bestCandidate -or
+                    ([DateTime]$candidate.CompletedAtUtc) -gt ([DateTime]$bestCandidate.CompletedAtUtc) -or
+                    (
+                        ([DateTime]$candidate.CompletedAtUtc) -eq ([DateTime]$bestCandidate.CompletedAtUtc) -and
+                        [double]$candidate.CompletionDistance -lt [double]$bestCandidate.CompletionDistance
+                    )) {
+                    $bestCandidate = $candidate
+                }
             }
 
-            if ($completedCandidates.Count -gt 0) {
-                $selected = @($completedCandidates.ToArray() | Sort-Object `
-                        @{ Expression = { $_.CompletionDistance }; Ascending = $true }, `
-                        @{ Expression = { if ($_.CompletedAtUtc) { $_.CompletedAtUtc } else { [DateTime]::MinValue } }; Descending = $true }, `
-                        @{ Expression = { $_.File.LastWriteTimeUtc }; Descending = $true } |
-                    Select-Object -First 1)[0]
+            if ($bestCandidate) {
+                $selected = $bestCandidate
                 $context = $selected.Context
                 $completedAtText = if ($context.CompletedAtUtc) { ([DateTime]$context.CompletedAtUtc).ToString('o') } else { '' }
-                Write-DiagnosticLog ("rollout fallback selected nearest file='{0}' turn='{1}' completedAt='{2}' ageSeconds={3:n1} distanceSeconds={4:n1} scanBytes={5} provider='{6}' cwdSet={7} taskSet={8} taskFound={9}." -f
+                Write-DiagnosticLog ("rollout fallback selected latest file='{0}' turn='{1}' completedAt='{2}' ageSeconds={3:n1} distanceSeconds={4:n1} scanBytes={5} scannedFiles={6} provider='{7}' cwdSet={8} taskSet={9} taskFound={10}." -f
                     $selected.File.Name,
                     ([string]$context.CompletedTurnId),
                     $completedAtText,
                     ([double]$context.CompletionAgeSeconds),
                     ([double]$context.CompletionDistanceSeconds),
                     ([int64]$context.CompletionScanBytes),
+                    $scannedCount,
                     ([string]$context.Provider),
                     (-not [string]::IsNullOrWhiteSpace([string]$context.Cwd)),
                     (-not [string]::IsNullOrWhiteSpace([string]$context.LastUserTask)),
@@ -907,7 +1010,7 @@ function Get-NotifyMessageFromLatestRollout {
         return ''
     }
 
-    Write-DiagnosticLog 'rollout fallback found no completion near notify anchor; using metadata-only fallback.'
+    Write-DiagnosticLog 'rollout fallback found no completed rollout; using metadata-only fallback.'
     return (Get-NotifyMessageFromRolloutContext $fallbackContext)
 }
 
@@ -986,7 +1089,39 @@ function Test-RolloutCompletionSelection {
             -not [bool]$contextWithoutCurrentUser.CompletionTaskFound
         )
 
-        return ($firstCheck -and $secondCheck)
+        $lateNotifyLines = @(
+            '{"timestamp":"2026-06-14T00:00:00Z","type":"session_meta","payload":{"model_provider":"custom","cwd":"D:\\work","id":"session-three"}}',
+            '{"timestamp":"2026-06-14T00:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"older-turn"}}',
+            '{"timestamp":"2026-06-14T00:00:02Z","type":"event_msg","payload":{"type":"user_message","message":"older task text"}}',
+            '{"timestamp":"2026-06-14T00:00:03Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"older-turn"}}',
+            '{"timestamp":"2026-06-14T00:04:57Z","type":"event_msg","payload":{"type":"task_started","turn_id":"latest-turn"}}',
+            '{"timestamp":"2026-06-14T00:04:58Z","type":"event_msg","payload":{"type":"user_message","message":"latest task text"}}',
+            '{"timestamp":"2026-06-14T00:04:59Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"latest-turn"}}'
+        )
+        [System.IO.File]::WriteAllLines($path, [string[]]$lateNotifyLines, $utf8)
+        $lateContext = Get-RolloutLatestCompletionContext `
+            -Path $path `
+            -AnchorUtc ([DateTime]'2026-06-14T00:30:00.0000000Z') `
+            -FutureGraceSeconds 45
+        $thirdCheck = (
+            [bool]$lateContext.HasCompletedTurn -and
+            [string]$lateContext.CompletedTurnId -eq 'latest-turn' -and
+            [string]$lateContext.LastUserTask -eq 'latest task text' -and
+            [bool]$lateContext.CompletionTaskFound
+        )
+
+        $lateFastContext = Get-RolloutLatestCompletionContext `
+            -Path $path `
+            -AnchorUtc ([DateTime]'2026-06-14T00:30:00.0000000Z') `
+            -FutureGraceSeconds 45 `
+            -Fast
+        $fourthCheck = (
+            [bool]$lateFastContext.HasCompletedTurn -and
+            [string]$lateFastContext.CompletedTurnId -eq 'latest-turn' -and
+            [string]$lateFastContext.LastUserTask -eq 'latest task text'
+        )
+
+        return ($firstCheck -and $secondCheck -and $thirdCheck -and $fourthCheck)
     }
     catch {
         return $false

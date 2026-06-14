@@ -708,17 +708,111 @@ function Process-RolloutFile {
     }
 }
 
+function Get-RolloutFileFromPath {
+    param([AllowNull()][string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
+    if ([System.IO.Path]::GetFileName($Path) -notlike 'rollout-*.jsonl') { return $null }
+
+    $file = Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue
+    if ($null -eq $file -or $file.PSIsContainer) { return $null }
+    return $file
+}
+
+function Process-RolloutPath {
+    param([AllowNull()][string]$Path)
+
+    $file = Get-RolloutFileFromPath -Path $Path
+    if ($null -eq $file) { return $false }
+    Process-RolloutFile $file
+    return $true
+}
+
+function Invoke-MonitorScan {
+    $count = 0
+    foreach ($file in Get-RolloutFiles) {
+        Process-RolloutFile $file
+        $count++
+    }
+    return $count
+}
+
+function New-RolloutFileWatcher {
+    try {
+        $watcher = New-Object System.IO.FileSystemWatcher
+        $watcher.Path = $script:SessionsDir
+        $watcher.Filter = 'rollout-*.jsonl'
+        $watcher.IncludeSubdirectories = $true
+        $watcher.NotifyFilter = (
+            [System.IO.NotifyFilters]::FileName -bor
+            [System.IO.NotifyFilters]::LastWrite -bor
+            [System.IO.NotifyFilters]::Size -bor
+            [System.IO.NotifyFilters]::CreationTime
+        )
+        $watcher.InternalBufferSize = 65536
+        $watcher.EnableRaisingEvents = $true
+        Write-DiagnosticLog "file watcher enabled for '$script:SessionsDir'."
+        return $watcher
+    }
+    catch {
+        Write-DiagnosticLog ("file watcher unavailable; using poll scan fallback. " + $_.Exception.Message)
+        return $null
+    }
+}
+
+function Process-WatcherChange {
+    param([AllowNull()]$Change)
+
+    if ($null -eq $Change -or [bool]$Change.TimedOut) { return $false }
+    $name = [string]$Change.Name
+    if ([string]::IsNullOrWhiteSpace($name)) { return $false }
+
+    $path = Join-Path $script:SessionsDir $name
+    if ([string]$Change.ChangeType -eq 'Deleted') { return $true }
+
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        if (Process-RolloutPath -Path $path) { return $true }
+        Start-Sleep -Milliseconds (25 * $attempt)
+    }
+    return $false
+}
+
 try {
     Initialize-Baseline
+    [void](Invoke-MonitorScan)
+    $watcher = New-RolloutFileWatcher
+    $pollMilliseconds = [Math]::Max(250, [Math]::Min(1000, [int]$PollSeconds * 1000))
+    $rescanSeconds = [Math]::Max(30, [Math]::Min(120, [int]$PollSeconds * 30))
+    $lastRescanUtc = [DateTime]::UtcNow
     while ($true) {
-        foreach ($file in Get-RolloutFiles) {
-            Process-RolloutFile $file
+        if ($watcher) {
+            $change = $watcher.WaitForChanged([System.IO.WatcherChangeTypes]::All, $pollMilliseconds)
+            if (-not [bool]$change.TimedOut) {
+                [void](Process-WatcherChange -Change $change)
+                for ($i = 0; $i -lt 20; $i++) {
+                    $nextChange = $watcher.WaitForChanged([System.IO.WatcherChangeTypes]::All, 1)
+                    if ([bool]$nextChange.TimedOut) { break }
+                    [void](Process-WatcherChange -Change $nextChange)
+                }
+            }
+            $nowUtc = [DateTime]::UtcNow
+            if (($nowUtc - $lastRescanUtc).TotalSeconds -ge $rescanSeconds) {
+                [void](Invoke-MonitorScan)
+                $lastRescanUtc = $nowUtc
+            }
+        }
+        else {
+            [void](Invoke-MonitorScan)
+            Start-Sleep -Milliseconds $pollMilliseconds
         }
         Check-PendingApprovalPopups
-        Start-Sleep -Seconds ([Math]::Max(1, $PollSeconds))
     }
 }
 finally {
+    if ($watcher) {
+        try { $watcher.EnableRaisingEvents = $false } catch { }
+        try { $watcher.Dispose() } catch { }
+    }
     if ($mutex) {
         try { $mutex.ReleaseMutex() | Out-Null } catch { }
         $mutex.Dispose()
