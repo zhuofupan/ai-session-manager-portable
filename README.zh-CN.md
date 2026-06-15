@@ -96,7 +96,7 @@ GUI 里的主要控件如下：
 | `同步勾选` | 只同步已勾选的记录 |
 | `同步全部` | 同步当前源账号下列出的记录 |
 | `双向同步` | 在两个 provider 桶之间互相同步 |
-| `cc-switch供应商` | `从终端启动` 时使用哪个 cc-switch Codex 供应商 |
+| `供应商` | `从终端启动` 时使用哪个 cc-switch Codex 供应商 |
 | `从终端启动` | 以管理员身份打开终端；终端第一行会显示 `[管理员模式]` 或 `[非管理员]`；开启 `+聊天` 时恢复当前选中聊天，关闭时在当前目录新建对话 |
 | `+聊天` | 开启后，当前选中聊天会执行 `codex resume <thread-id>`；列表最左侧勾选列只用于同步勾选记录 |
 | `模型` / `智能` | 启动 Codex 时临时追加 `-m` 和 `model_reasoning_effort` 覆盖项；选择默认时使用当前节点或 `config.toml` 配置 |
@@ -194,7 +194,7 @@ fast 模式下的 Apps 插件兼容保护会自动启用，界面不再显示额
 
 如果找到了 `cc-switch.db`，GUI 在同步到目标账号桶时会读取目标 cc-switch 节点的 Codex 配置，并用于改写目标副本的续聊元数据。例如同步到 `custom` 时，工具会读取 `Any Router` 节点里的 `model`、`model_reasoning_effort` 等配置，并对目标 rollout 做第三方兼容清理。
 
-只有使用 GUI 里的 `cc-switch供应商` 下拉框切换供应商并启动 Codex 时，才需要找到 `cc-switch.db`。这个下拉框读取的是 cc-switch 里的 Codex 节点，例如 `OpenAI Official`、`Any Router` 或你自己配置的节点。
+只有使用 GUI 里的 `供应商` 下拉框切换供应商并启动 Codex 时，才需要找到 `cc-switch.db`。这个下拉框读取的是 cc-switch 里的 Codex 节点，例如 `OpenAI Official`、`Any Router` 或你自己配置的节点。
 
 工具会自动尝试这些位置：
 
@@ -206,7 +206,7 @@ fast 模式下的 Apps 插件兼容保护会自动启用，界面不再显示额
 
 如果新增节点后没有显示，先点 `刷新`。仍然没有时，点 `加载cc-switch.db文件`，选择 `cc-switch.db` 或同结构 `.db` 文件。
 
-注意：`Codex源账号` 和 `Codex目标账号` 表示 Codex 历史记录里的 `model_provider` 桶；`cc-switch供应商` 表示启动 Codex 时使用的 cc-switch 节点。两者不是同一个概念。
+注意：`Codex源账号` 和 `Codex目标账号` 表示 Codex 历史记录里的 `model_provider` 桶；`供应商` 表示启动 Codex 时使用的 cc-switch 节点。两者不是同一个概念。
 
 ## 弹窗提醒
 

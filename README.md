@@ -99,7 +99,7 @@ The GUI opens with these main controls:
 | `同步勾选` | Copy only checked rows |
 | `同步全部` | Copy all listed source rows to the target provider |
 | `双向同步` | Sync both directions between the selected providers |
-| `cc-switch供应商` | cc-switch Codex provider used by `从终端启动` |
+| `供应商` | cc-switch Codex provider used by `从终端启动` |
 | `从终端启动` | Open an elevated terminal; the first terminal line shows `[管理员模式]` or `[非管理员]`; resume the current row when `+聊天` is enabled, or start a new chat when disabled |
 | `+聊天` | When enabled, the current row launches with `codex resume <thread-id>`; the left checkbox column is only for checked-row sync |
 | `模型` / `智能` | Temporarily pass `-m` and `model_reasoning_effort` launch overrides to Codex; default uses the selected node or `config.toml` |
@@ -195,7 +195,7 @@ Basic history copying does not strictly require cc-switch; without cc-switch, th
 
 When `cc-switch.db` is available, GUI sync reads the destination Codex node configuration and uses it to rewrite continuation metadata in the target copy. For example, syncing to `custom` reads the `Any Router` node model and reasoning settings, then applies proxy compatibility cleanup to the copied rollout.
 
-If `cc-switch.db` is available, the GUI can read Codex providers from cc-switch and display them in the `cc-switch供应商` dropdown. That dropdown is for launching Codex through a selected cc-switch provider; the source and target history buckets still come from Codex `model_provider` values.
+If `cc-switch.db` is available, the GUI can read Codex providers from cc-switch and display them in the `供应商` dropdown. That dropdown is for launching Codex through a selected cc-switch provider; the source and target history buckets still come from Codex `model_provider` values.
 
 The tool searches for `cc-switch.db` in these places:
 

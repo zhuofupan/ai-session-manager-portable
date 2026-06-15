@@ -33,7 +33,7 @@ public static class CodexHistorySyncWindow {
 [System.Windows.Forms.Application]::EnableVisualStyles()
 [System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException)
 
-$script:AppVersion = '2026.06.15.04'
+$script:AppVersion = '2026.06.15.05'
 $script:AppAuthor = 'Joff Pan'
 $script:GitHubRepo = 'zhuofupan/codex-history-sync-portable'
 $script:GitHubUrl = "https://github.com/$script:GitHubRepo"
@@ -294,7 +294,7 @@ $script:UiStrings = @{
         TargetProvider       = 'Codex目标账号'
         DirectoryFilter      = '目录筛选'
         DisplayLimit         = '显示条数'
-        CcSwitchProvider     = 'cc-switch供应商'
+        CcSwitchProvider     = '供应商'
         Archived             = '显示归档'
         Refresh              = '刷新'
         SelectAll            = '全选'
@@ -355,7 +355,7 @@ $script:UiStrings = @{
         TargetProvider       = 'Codex Target'
         DirectoryFilter      = 'Directory'
         DisplayLimit         = 'Rows'
-        CcSwitchProvider     = 'cc-switch Provider'
+        CcSwitchProvider     = 'Provider'
         Archived             = 'Show Archived'
         Refresh              = 'Refresh'
         SelectAll            = 'Select All'
@@ -1392,6 +1392,23 @@ function Resize-GroupToFitControls {
     )
 }
 
+function Align-GroupRightEdges {
+    param(
+        [Parameter(Mandatory)]$FirstGroup,
+        [Parameter(Mandatory)]$SecondGroup
+    )
+
+    $targetRight = [Math]::Max($FirstGroup.Right, $SecondGroup.Right)
+    foreach ($group in @($FirstGroup, $SecondGroup)) {
+        if ($group.Right -lt $targetRight) {
+            $group.Size = New-Object System.Drawing.Size(
+                ($group.Width + ($targetRight - $group.Right)),
+                $group.Height
+            )
+        }
+    }
+}
+
 function Layout-HeaderMeta {
     if (-not $headerPanel -or -not $headerMeta -or -not $headerGitHub -or -not $headerLanguageLink -or -not $headerLanguageSeparator) { return }
 
@@ -1490,6 +1507,7 @@ function Layout-ToolbarGroups {
     $pathGroup.Location = New-Object System.Drawing.Point(($syncGroup.Right + $gap), 70)
     $launchGroup.Location = New-Object System.Drawing.Point(12, 166)
     $supportGroup.Location = New-Object System.Drawing.Point(($launchGroup.Right + $gap), 166)
+    Align-GroupRightEdges -FirstGroup $pathGroup -SecondGroup $supportGroup
 
     $requiredWidth = [Math]::Max($pathGroup.Right, $supportGroup.Right) + 28
     $newMinWidth = [Math]::Max(1320, $requiredWidth)
@@ -2015,7 +2033,7 @@ function Show-AppHelp {
 
     Add-HelpRichLine -Box $box -Text '重点概念' -Font $sectionFont -Color $blue
     Add-HelpRichLine -Box $box -Text 'Codex源账号 / Codex目标账号：历史记录数据库里的 model_provider 桶，用于迁移聊天记录。' -Font $strongFont -Color $slate -BackColor $highlight
-    Add-HelpRichLine -Box $box -Text 'cc-switch供应商：从终端启动 Codex 时使用的 cc-switch 节点，和上面的历史记录账号不是同一个概念。' -Font $strongFont -Color $slate -BackColor $highlight
+    Add-HelpRichLine -Box $box -Text '供应商：从终端启动 Codex 时使用的 cc-switch 节点，和上面的历史记录账号不是同一个概念。' -Font $strongFont -Color $slate -BackColor $highlight
     Add-HelpRichLine -Box $box -Text ''
 
     Add-HelpRichLine -Box $box -Text '加载codex账号' -Font $sectionFont -Color $blue
@@ -4716,7 +4734,7 @@ function Invoke-LaunchForProvider {
     $providerLabel = [string]$Combo.SelectedItem
     $providerId = Resolve-CcSwitchProviderId $providerLabel
     if ([string]::IsNullOrWhiteSpace($providerId)) {
-        throw '请先选择 cc-switch供应商。若下拉菜单为空，请点击【软件配置文件】填写 ccSwitchHome 后保存，或点击【加载cc-switch.db文件】选择 cc-switch.db。'
+        throw '请先选择供应商。若下拉菜单为空，请点击【软件配置文件】填写 ccSwitchHome 后保存，或点击【加载cc-switch.db文件】选择 cc-switch.db。'
     }
     $loadChatOnLaunch = $script:LoadCheckedRecordBox -and [bool]$script:LoadCheckedRecordBox.Checked
     $resumeSelection = if ($loadChatOnLaunch) { Get-LaunchResumeSelection } else { $null }
@@ -5517,7 +5535,7 @@ $pathGroup.Controls.Add($openConfigButton)
 
 $launchGroup = New-GroupBox '启动与提醒' 12 166 880 58
 $script:Form.Controls.Add($launchGroup)
-$ccProviderLabel = New-Label 'cc-switch供应商' 14 24 102
+$ccProviderLabel = New-Label '供应商' 14 24 52
 $launchGroup.Controls.Add($ccProviderLabel)
 $script:CodexProviderCombo = New-Object System.Windows.Forms.ComboBox
 $script:CodexProviderCombo.DropDownStyle = 'DropDownList'
