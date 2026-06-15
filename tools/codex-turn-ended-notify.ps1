@@ -7,6 +7,7 @@ param(
     [string]$ForwardBase64,
     [string]$CodexHome,
     [string]$Kind = 'Complete',
+    [string]$Source,
     [switch]$ForwardOnly,
     [string]$ArgFile,
     [switch]$SelfTest,
@@ -252,6 +253,10 @@ function Apply-ForwardedNotifyArguments {
                 if (($i + 1) -lt $items.Count) { $script:Kind = [string]$items[++$i] }
                 continue
             }
+            { $_ -in @('-source', '--source') } {
+                if (($i + 1) -lt $items.Count) { $script:Source = [string]$items[++$i] }
+                continue
+            }
             { $_ -in @('-forwardonly', '--forwardonly') } {
                 $script:ForwardOnly = $true
                 continue
@@ -267,6 +272,31 @@ function Apply-ForwardedNotifyArguments {
     }
 
     return $remaining.ToArray()
+}
+
+function Get-NotifySourceLabel {
+    param(
+        [AllowNull()][string]$Value,
+        [AllowNull()][string]$NotifyKind
+    )
+
+    $clean = ([string]$Value).Trim()
+    if ([string]::IsNullOrWhiteSpace($clean)) {
+        if ([string]::Equals($NotifyKind, 'ApprovalWait', [System.StringComparison]::OrdinalIgnoreCase)) {
+            return 'MON'
+        }
+        return 'NOTIFY'
+    }
+
+    if ($clean -match '^(?i:monitor|mon|rollout|watcher)') { return 'MON' }
+    if ($clean -match '^(?i:test|selftest)') { return 'TEST' }
+    if ($clean -match '^(?i:notify|codex|cli)$') { return 'NOTIFY' }
+    if ($clean -match '^(?i:forward|previous)') { return 'FWD' }
+
+    $label = ($clean -replace '[^A-Za-z0-9_-]', '').ToUpperInvariant()
+    if ([string]::IsNullOrWhiteSpace($label)) { return 'SRC' }
+    if ($label.Length -gt 10) { return $label.Substring(0, 10) }
+    return $label
 }
 
 function Join-OptionalPath {
@@ -1181,6 +1211,7 @@ if ([string]::IsNullOrWhiteSpace($Message)) {
 }
 $Title = Repair-MojibakeText $Title
 $Message = Repair-MojibakeText $Message
+$sourceLabelText = Get-NotifySourceLabel -Value $Source -NotifyKind $Kind
 
 function Invoke-ForwardNotify {
     param(
@@ -1267,8 +1298,10 @@ function Test-ShouldSuppressDuplicateNotification {
     }
 }
 
-Write-DiagnosticLog ("start kind='{0}' forwardOnly={1} hasForward={2} remainingArgs={3} messageLength={4}" -f
+Write-DiagnosticLog ("start kind='{0}' source='{1}' sourceLabel='{2}' forwardOnly={3} hasForward={4} remainingArgs={5} messageLength={6}" -f
     $Kind,
+    $Source,
+    $sourceLabelText,
     [bool]$ForwardOnly,
     (-not [string]::IsNullOrWhiteSpace($ForwardBase64)),
     @($RemainingArgs).Count,
@@ -1330,6 +1363,27 @@ $iconBackColor = $accentColor
 $messageTextColor = [System.Drawing.Color]::FromArgb(55, 65, 81)
 $messageAccountColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
 $messageThreadColor = [System.Drawing.Color]::FromArgb(124, 58, 237)
+$sourceBackColor = if ([string]::Equals($sourceLabelText, 'NOTIFY', [System.StringComparison]::OrdinalIgnoreCase)) {
+    [System.Drawing.Color]::FromArgb(219, 234, 254)
+}
+elseif ([string]::Equals($sourceLabelText, 'MON', [System.StringComparison]::OrdinalIgnoreCase)) {
+    [System.Drawing.Color]::FromArgb(220, 252, 231)
+}
+elseif ([string]::Equals($sourceLabelText, 'TEST', [System.StringComparison]::OrdinalIgnoreCase)) {
+    [System.Drawing.Color]::FromArgb(254, 243, 199)
+}
+else {
+    [System.Drawing.Color]::FromArgb(241, 245, 249)
+}
+$sourceTextColor = if ([string]::Equals($sourceLabelText, 'MON', [System.StringComparison]::OrdinalIgnoreCase)) {
+    [System.Drawing.Color]::FromArgb(22, 101, 52)
+}
+elseif ([string]::Equals($sourceLabelText, 'TEST', [System.StringComparison]::OrdinalIgnoreCase)) {
+    [System.Drawing.Color]::FromArgb(146, 64, 14)
+}
+else {
+    [System.Drawing.Color]::FromArgb(30, 64, 175)
+}
 
 function Play-NotifySound {
     try {
@@ -1424,9 +1478,20 @@ $titleLabel.Text = $Title
 $titleLabel.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 12, [System.Drawing.FontStyle]::Bold)
 $titleLabel.ForeColor = [System.Drawing.Color]::FromArgb(25, 31, 40)
 $titleLabel.Location = New-Object System.Drawing.Point(78, 22)
-$titleLabel.Size = New-Object System.Drawing.Size(($width - 118), 28)
+$titleLabel.Size = New-Object System.Drawing.Size(($width - 180), 28)
 $titleLabel.TextAlign = 'MiddleLeft'
+$titleLabel.AutoEllipsis = $true
 $form.Controls.Add($titleLabel)
+
+$sourceLabel = New-Object System.Windows.Forms.Label
+$sourceLabel.Text = $sourceLabelText
+$sourceLabel.Font = New-Object System.Drawing.Font('Segoe UI', 8.5, [System.Drawing.FontStyle]::Bold)
+$sourceLabel.ForeColor = $sourceTextColor
+$sourceLabel.BackColor = $sourceBackColor
+$sourceLabel.Location = New-Object System.Drawing.Point(($width - 92), 26)
+$sourceLabel.Size = New-Object System.Drawing.Size(52, 20)
+$sourceLabel.TextAlign = 'MiddleCenter'
+$form.Controls.Add($sourceLabel)
 
 Add-NotifyMessageLabels -Parent $form -Text $Message -Left 80 -Top 50 -Width ($width - 104)
 
@@ -1495,7 +1560,7 @@ $soundTimer.Add_Tick({
     })
 
 $form.Add_Shown({
-        Write-DiagnosticLog ("form shown title='{0}' kind='{1}' seconds={2}" -f $Title, $Kind, $Seconds)
+        Write-DiagnosticLog ("form shown title='{0}' kind='{1}' sourceLabel='{2}' seconds={3}" -f $Title, $Kind, $sourceLabelText, $Seconds)
         $region = [CodexNotifyNative]::CreateRoundRectRgn(0, 0, $form.Width + 1, $form.Height + 1, 14, 14)
         [void][CodexNotifyNative]::SetWindowRgn($form.Handle, $region, $true)
         $form.Refresh()
@@ -1522,7 +1587,7 @@ $form.Add_Shown({
     })
 
 $form.Add_FormClosed({
-        Write-DiagnosticLog ("form closed title='{0}' kind='{1}'" -f $Title, $Kind)
+        Write-DiagnosticLog ("form closed title='{0}' kind='{1}' sourceLabel='{2}'" -f $Title, $Kind, $sourceLabelText)
         $keepTopTimer.Stop()
         $closeTimer.Stop()
         $soundTimer.Stop()

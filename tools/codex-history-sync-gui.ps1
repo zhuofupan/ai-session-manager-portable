@@ -4540,6 +4540,8 @@ function Show-TestTurnEndedNotify {
         $script:NotifierPath,
         '-Title',
         'Codex 会话已结束',
+        '-Source',
+        'Test',
         '-CodexHome',
         $CodexHome,
         '-Kind',
