@@ -33,7 +33,7 @@ public static class CodexHistorySyncWindow {
 [System.Windows.Forms.Application]::EnableVisualStyles()
 [System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException)
 
-$script:AppVersion = '2026.06.15.08'
+$script:AppVersion = '2026.06.15.09'
 $script:AppAuthor = 'Joff Pan'
 $script:GitHubRepo = 'zhuofupan/codex-history-sync-portable'
 $script:GitHubUrl = "https://github.com/$script:GitHubRepo"
@@ -1179,6 +1179,40 @@ function New-Button {
         $button.ForeColor = [System.Drawing.Color]::FromArgb(31, 41, 55)
         $button.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(203, 213, 225)
     }
+    return $button
+}
+
+function New-NotifyTestButton {
+    param([int]$X, [int]$Y)
+
+    $button = New-Button '' $X $Y 26 'Soft'
+    $button.AccessibleName = '测试弹窗'
+    $button.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $button.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(147, 197, 253)
+    $button.FlatAppearance.MouseOverBackColor = [System.Drawing.Color]::FromArgb(219, 234, 254)
+    $button.FlatAppearance.MouseDownBackColor = [System.Drawing.Color]::FromArgb(191, 219, 254)
+    $button.Add_Paint({
+            param($Sender, $EventArgs)
+
+            $graphics = $EventArgs.Graphics
+            $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+            $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(30, 64, 175), ([single]1.7))
+            $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(30, 64, 175))
+            try {
+                $x = [Math]::Floor(($Sender.Width - 14) / 2)
+                $y = [Math]::Floor(($Sender.Height - 17) / 2)
+                $graphics.DrawArc($pen, $x + 3, $y + 2, 8, 8, 200, 140)
+                $graphics.DrawLine($pen, $x + 3, $y + 8, $x + 1, $y + 13)
+                $graphics.DrawLine($pen, $x + 11, $y + 8, $x + 13, $y + 13)
+                $graphics.DrawLine($pen, $x + 1, $y + 13, $x + 13, $y + 13)
+                $graphics.FillEllipse($brush, $x + 6, $y, 3, 3)
+                $graphics.FillEllipse($brush, $x + 6, $y + 15, 3, 3)
+            }
+            finally {
+                $pen.Dispose()
+                $brush.Dispose()
+            }
+        })
     return $button
 }
 
@@ -5626,9 +5660,7 @@ $script:TurnEndedNotifyBox.Location = New-Object System.Drawing.Point(824, 25)
 $script:TurnEndedNotifyBox.Size = New-Object System.Drawing.Size(82, 22)
 $script:TurnEndedNotifyBox.Checked = $true
 $launchGroup.Controls.Add($script:TurnEndedNotifyBox)
-$testNotifyButton = New-Button '!' 912 22 26 'Soft'
-$testNotifyButton.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
-$testNotifyButton.AccessibleName = '测试弹窗'
+$testNotifyButton = New-NotifyTestButton 912 22
 $launchGroup.Controls.Add($testNotifyButton)
 if ($script:ToolTip) {
     $script:ToolTip.SetToolTip($testNotifyButton, '测试弹窗')
