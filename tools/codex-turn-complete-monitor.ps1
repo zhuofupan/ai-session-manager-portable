@@ -513,20 +513,28 @@ function Invoke-ApprovalWaitPopup {
         $context = Get-ContextForFile ([string]$Pending.Path)
     }
 
-    $title = 'Codex 等待权限审批'
+    $title = ConvertFrom-Utf8Base64 'Q29kZXgg562J5b6F5p2D6ZmQ5a6h5om5'
+    $unknownCwd = ConvertFrom-Utf8Base64 '5pyq55+l55uu5b2V'
+    $unknownAccount = ConvertFrom-Utf8Base64 '5pyq55+l6LSm5Y+3'
+    $currentThread = ConvertFrom-Utf8Base64 '5b2T5YmN5Lya6K+d'
+    $approvalRequest = ConvertFrom-Utf8Base64 '5p2D6ZmQ5a6h5om56K+35rGC'
+    $accountLabel = ConvertFrom-Utf8Base64 '6LSm5Y+377ya'
+    $threadLabel = ConvertFrom-Utf8Base64 '6IGK5aSp77ya'
+    $approvalWaitLabel = ConvertFrom-Utf8Base64 '5bey562J5b6F5a6h5om5IA=='
+
     $cwd = [string]$context.Cwd
-    $cwdLabel = if (-not [string]::IsNullOrWhiteSpace($cwd)) { Split-Path -Leaf $cwd } else { '未知目录' }
+    $cwdLabel = if (-not [string]::IsNullOrWhiteSpace($cwd)) { Split-Path -Leaf $cwd } else { $unknownCwd }
     if ([string]::IsNullOrWhiteSpace($cwdLabel)) { $cwdLabel = Shorten-Text $cwd 24 }
     $provider = Shorten-Text ([string]$context.Provider) 18
-    if ([string]::IsNullOrWhiteSpace($provider)) { $provider = '未知账号' }
+    if ([string]::IsNullOrWhiteSpace($provider)) { $provider = $unknownAccount }
     $thread = [string]$context.ThreadId
     if ($thread.Length -gt 8) { $thread = $thread.Substring(0, 8) }
-    if ([string]::IsNullOrWhiteSpace($thread)) { $thread = '当前会话' }
+    if ([string]::IsNullOrWhiteSpace($thread)) { $thread = $currentThread }
 
     $age = [Math]::Max(0, [int](([DateTime]::UtcNow - [datetime]$Pending.StartedAt).TotalSeconds))
     $summary = Shorten-Text ([string]$Pending.Summary) 54
-    if ([string]::IsNullOrWhiteSpace($summary)) { $summary = '权限审批请求' }
-    $message = "账号：$provider | $cwdLabel`r`n聊天：$thread`r`n已等待审批 ${age}s：$summary"
+    if ([string]::IsNullOrWhiteSpace($summary)) { $summary = $approvalRequest }
+    $message = "$accountLabel$provider | $cwdLabel`r`n$threadLabel$thread`r`n$approvalWaitLabel${age}s：$summary"
     $messageBase64 = ConvertTo-Utf8Base64 $message
 
     if (-not [string]::IsNullOrWhiteSpace($NotifierPath) -and

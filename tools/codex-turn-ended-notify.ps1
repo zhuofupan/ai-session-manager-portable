@@ -1179,6 +1179,7 @@ if ($needsRolloutContext) {
 if ([string]::IsNullOrWhiteSpace($Message)) {
     $Message = ConvertFrom-Utf8Base64 'Q29kZXgg5bey5a6M5oiQ5b2T5YmN5Lya6K+d44CC'
 }
+$Title = Repair-MojibakeText $Title
 $Message = Repair-MojibakeText $Message
 
 function Invoke-ForwardNotify {
