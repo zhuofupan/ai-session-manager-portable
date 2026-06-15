@@ -85,21 +85,6 @@ if ([string]::IsNullOrWhiteSpace($NotifierPath)) {
     $NotifierPath = Join-Path $script:ToolDir 'codex-turn-ended-notify.ps1'
 }
 
-if ($SelfTest) {
-    Write-Output "Monitor SelfTest OK. CodexHome: $script:CodexHome"
-    return
-}
-
-$sha = [System.Security.Cryptography.SHA256]::Create()
-$hashBytes = $sha.ComputeHash($utf8.GetBytes($script:CodexHome.ToLowerInvariant()))
-$hash = ([BitConverter]::ToString($hashBytes) -replace '-', '').Substring(0, 16)
-$createdNew = $false
-$mutex = New-Object System.Threading.Mutex($true, "Local\CodexTurnCompleteMonitor_$hash", [ref]$createdNew)
-if (-not $createdNew) {
-    Write-DiagnosticLog "monitor already running for CodexHome='$script:CodexHome'; exiting duplicate."
-    return
-}
-
 $script:MonitorStartedAt = [DateTimeOffset]::UtcNow
 $script:Offsets = @{}
 $script:Buffers = @{}
@@ -107,7 +92,21 @@ $script:Contexts = @{}
 $script:SeenTurns = New-Object 'System.Collections.Generic.HashSet[string]'
 $script:PendingApprovals = @{}
 $script:StartupCompletionGraceSeconds = 60
-Write-DiagnosticLog "monitor started CodexHome='$script:CodexHome' sessions='$script:SessionsDir' pollSeconds=$PollSeconds."
+
+$mutex = $null
+if (-not $SelfTest) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $hashBytes = $sha.ComputeHash($utf8.GetBytes($script:CodexHome.ToLowerInvariant()))
+    $hash = ([BitConverter]::ToString($hashBytes) -replace '-', '').Substring(0, 16)
+    $createdNew = $false
+    $mutex = New-Object System.Threading.Mutex($true, "Local\CodexTurnCompleteMonitor_$hash", [ref]$createdNew)
+    if (-not $createdNew) {
+        Write-DiagnosticLog "monitor already running for CodexHome='$script:CodexHome'; exiting duplicate."
+        return
+    }
+
+    Write-DiagnosticLog "monitor started CodexHome='$script:CodexHome' sessions='$script:SessionsDir' pollSeconds=$PollSeconds."
+}
 
 function Shorten-Text {
     param(
@@ -409,27 +408,39 @@ function Get-ApprovalEventInfo {
         if ($eventTime -lt $script:MonitorStartedAt.AddSeconds(-1 * [int]$script:StartupCompletionGraceSeconds)) { return $null }
 
         $payload = $Object.payload
-        $typeText = @(
-            [string]$Object.type,
-            [string]$payload.type,
+        $objectType = [string]$Object.type
+        $payloadType = [string]$payload.type
+        $signalText = @(
+            $payloadType,
             [string]$payload.subtype,
             [string]$payload.status,
-            [string]$payload.state
+            [string]$payload.state,
+            (Get-ObjectStringProperty $payload @('kind', 'name', 'category', 'event_type', 'eventType'))
         ) -join ' '
-        $searchText = (($typeText + ' ' + (Get-ObjectSearchText $Object))).ToLowerInvariant()
+        $signalText = $signalText.ToLowerInvariant()
 
-        $isRequest = (
-            ($searchText -match 'approval|permission|sandbox|escalat') -and
-            ($searchText -match 'request|pending|wait|waiting|prompt|required|requires|ask')
-        )
-        $isResolved = (
-            ($searchText -match 'approval|permission|sandbox|escalat') -and
-            ($searchText -match 'approved|denied|reject|rejected|cancel|cancelled|canceled|granted|resolved|response|decision|completed')
-        )
-        if ([string]$Object.type -eq 'event_msg' -and [string]$payload.type -eq 'task_complete') {
+        $isRequest = $false
+        $isResolved = $false
+        if ($objectType -eq 'event_msg') {
+            $hasApprovalSignal = ($signalText -match 'approval|permission|escalat')
+            if (-not $hasApprovalSignal -and $signalText -match 'sandbox') {
+                $hasApprovalSignal = ($signalText -match 'request|approval|permission|escalat')
+            }
+
+            $isRequest = (
+                $hasApprovalSignal -and
+                $signalText -match 'request|requested|pending|wait|waiting|prompt|required|requires'
+            )
+            $isResolved = (
+                $hasApprovalSignal -and
+                $signalText -match 'approved|denied|reject|rejected|cancel|cancelled|canceled|granted|resolved|response|decision|completed'
+            )
+        }
+
+        if ($objectType -eq 'event_msg' -and $payloadType -eq 'task_complete') {
             $isResolved = $true
         }
-        if ([string]$payload.type -match 'exec_command_begin|exec_command_end|command_begin|command_started|tool_call_begin') {
+        if ($payloadType -match 'exec_command_begin|exec_command_end|command_begin|command_started|tool_call_begin') {
             $isResolved = $true
         }
 
@@ -472,6 +483,77 @@ function Get-ApprovalEventInfo {
     catch {
         return $null
     }
+}
+
+function Test-ApprovalEventDetection {
+    $now = ([DateTimeOffset]::UtcNow).ToString('o')
+    $path = 'rollout-selftest.jsonl'
+
+    $turnContext = [pscustomobject]@{
+        timestamp = $now
+        type      = 'turn_context'
+        payload   = [pscustomobject]@{
+            approval_policy   = 'never'
+            sandbox_policy    = [pscustomobject]@{ type = 'danger-full-access' }
+            permission_profile = [pscustomobject]@{ type = 'disabled' }
+            summary           = 'request waiting'
+        }
+    }
+    $agentMessage = [pscustomobject]@{
+        timestamp = $now
+        type      = 'event_msg'
+        payload   = [pscustomobject]@{
+            type    = 'agent_message'
+            message = 'approval permission sandbox request waiting'
+        }
+    }
+    $functionCall = [pscustomobject]@{
+        timestamp = $now
+        type      = 'response_item'
+        payload   = [pscustomobject]@{
+            type      = 'function_call'
+            name      = 'shell_command'
+            arguments = '{"sandbox_permissions":"use_default","command":"echo request"}'
+            call_id   = 'call_false_positive'
+        }
+    }
+    $approvalRequest = [pscustomobject]@{
+        timestamp = $now
+        type      = 'event_msg'
+        payload   = [pscustomobject]@{
+            type    = 'exec_approval_request'
+            call_id = 'call_real_request'
+            command = 'echo ok'
+        }
+    }
+    $approvalResolved = [pscustomobject]@{
+        timestamp = $now
+        type      = 'event_msg'
+        payload   = [pscustomobject]@{
+            type    = 'exec_approval_response'
+            status  = 'approved'
+            call_id = 'call_real_request'
+        }
+    }
+
+    $falsePositiveChecks = @(
+        (Get-ApprovalEventInfo -Object $turnContext -Path $path),
+        (Get-ApprovalEventInfo -Object $agentMessage -Path $path),
+        (Get-ApprovalEventInfo -Object $functionCall -Path $path)
+    ) | Where-Object { $null -ne $_ }
+    if (@($falsePositiveChecks).Count -ne 0) { return $false }
+
+    $requestInfo = Get-ApprovalEventInfo -Object $approvalRequest -Path $path
+    if ($null -eq $requestInfo -or -not [bool]$requestInfo.IsRequest -or [bool]$requestInfo.IsResolved) {
+        return $false
+    }
+
+    $resolvedInfo = Get-ApprovalEventInfo -Object $approvalResolved -Path $path
+    if ($null -eq $resolvedInfo -or [bool]$resolvedInfo.IsRequest -or -not [bool]$resolvedInfo.IsResolved) {
+        return $false
+    }
+
+    return $true
 }
 
 function Register-ApprovalEvent {
@@ -783,6 +865,14 @@ function Process-WatcherChange {
         Start-Sleep -Milliseconds (25 * $attempt)
     }
     return $false
+}
+
+if ($SelfTest) {
+    if (-not (Test-ApprovalEventDetection)) {
+        throw 'Monitor SelfTest failed: approval event detection is too broad.'
+    }
+    Write-Output "Monitor SelfTest OK. CodexHome: $script:CodexHome"
+    return
 }
 
 try {
