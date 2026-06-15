@@ -1327,6 +1327,11 @@ else {
 }
 $iconText = if ($isApprovalWait) { '!' } else { 'OK' }
 $iconBackColor = $accentColor
+$messageTextColor = [System.Drawing.Color]::FromArgb(55, 65, 81)
+$messageMutedColor = [System.Drawing.Color]::FromArgb(107, 114, 128)
+$messageAccountColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
+$messageDirectoryColor = [System.Drawing.Color]::FromArgb(13, 148, 136)
+$messageThreadColor = [System.Drawing.Color]::FromArgb(124, 58, 237)
 
 function Play-NotifySound {
     try {
@@ -1347,6 +1352,93 @@ function Play-NotifySound {
     catch {
         try { [System.Media.SystemSounds]::Exclamation.Play() } catch { return }
     }
+}
+
+function Add-RichNotifyText {
+    param(
+        [Parameter(Mandatory)]$Box,
+        [AllowNull()][string]$Text,
+        [Parameter(Mandatory)][System.Drawing.Color]$Color,
+        [System.Drawing.FontStyle]$Style = [System.Drawing.FontStyle]::Regular
+    )
+
+    if ($null -eq $Text) { return }
+    $Box.SelectionStart = $Box.TextLength
+    $Box.SelectionLength = 0
+    $Box.SelectionColor = $Color
+    $Box.SelectionFont = New-Object System.Drawing.Font($Box.Font, $Style)
+    $Box.AppendText([string]$Text)
+}
+
+function Split-NotifyLinePrefix {
+    param([AllowNull()][string]$Line)
+
+    if ([string]::IsNullOrWhiteSpace($Line)) { return $null }
+    $match = [System.Text.RegularExpressions.Regex]::Match([string]$Line, '^(.{1,16}?[:：])(.*)$')
+    if (-not $match.Success) { return $null }
+    return @($match.Groups[1].Value, $match.Groups[2].Value)
+}
+
+function Add-NotifyMessageLine {
+    param(
+        [Parameter(Mandatory)]$Box,
+        [AllowNull()][string]$Line
+    )
+
+    $prefixParts = Split-NotifyLinePrefix $Line
+    if (-not $prefixParts) {
+        Add-RichNotifyText -Box $Box -Text $Line -Color $messageTextColor
+        return
+    }
+
+    $prefix = [string]$prefixParts[0]
+    $rest = [string]$prefixParts[1]
+    $accountWord = ConvertFrom-Utf8Base64 '6LSm5Y+3'
+    $threadWord = ConvertFrom-Utf8Base64 '6IGK5aSp'
+    $taskWord = ConvertFrom-Utf8Base64 '5Lu75Yqh'
+
+    Add-RichNotifyText -Box $Box -Text $prefix -Color $accentColor -Style ([System.Drawing.FontStyle]::Bold)
+
+    if ($prefix.StartsWith($accountWord, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $parts = [System.Text.RegularExpressions.Regex]::Split($rest, '\s+\|\s+', 2)
+        Add-RichNotifyText -Box $Box -Text $parts[0] -Color $messageAccountColor -Style ([System.Drawing.FontStyle]::Bold)
+        if ($parts.Count -gt 1) {
+            Add-RichNotifyText -Box $Box -Text ' | ' -Color $messageMutedColor
+            Add-RichNotifyText -Box $Box -Text $parts[1] -Color $messageDirectoryColor -Style ([System.Drawing.FontStyle]::Bold)
+        }
+        return
+    }
+
+    if ($prefix.StartsWith($threadWord, [System.StringComparison]::OrdinalIgnoreCase)) {
+        Add-RichNotifyText -Box $Box -Text $rest -Color $messageThreadColor -Style ([System.Drawing.FontStyle]::Bold)
+        return
+    }
+
+    if ($prefix.StartsWith($taskWord, [System.StringComparison]::OrdinalIgnoreCase)) {
+        Add-RichNotifyText -Box $Box -Text $rest -Color $messageTextColor
+        return
+    }
+
+    Add-RichNotifyText -Box $Box -Text $rest -Color $messageTextColor
+}
+
+function Set-NotifyRichMessageText {
+    param(
+        [Parameter(Mandatory)]$Box,
+        [AllowNull()][string]$Text
+    )
+
+    $Box.Clear()
+    $normalized = ([string]$Text).Replace("`r`n", "`n").Replace("`r", "`n")
+    $lines = $normalized -split "`n"
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($i -gt 0) {
+            Add-RichNotifyText -Box $Box -Text ([Environment]::NewLine) -Color $messageMutedColor
+        }
+        Add-NotifyMessageLine -Box $Box -Line $lines[$i]
+    }
+    $Box.SelectionStart = 0
+    $Box.SelectionLength = 0
 }
 
 $screen = [System.Windows.Forms.Screen]::FromPoint([System.Windows.Forms.Cursor]::Position).WorkingArea
@@ -1394,14 +1486,21 @@ $titleLabel.Size = New-Object System.Drawing.Size(($width - 118), 28)
 $titleLabel.TextAlign = 'MiddleLeft'
 $form.Controls.Add($titleLabel)
 
-$messageLabel = New-Object System.Windows.Forms.Label
-$messageLabel.Text = $Message
-$messageLabel.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 10)
-$messageLabel.ForeColor = [System.Drawing.Color]::FromArgb(68, 76, 88)
-$messageLabel.Location = New-Object System.Drawing.Point(80, 50)
-$messageLabel.Size = New-Object System.Drawing.Size(($width - 104), 64)
-$messageLabel.TextAlign = 'TopLeft'
-$form.Controls.Add($messageLabel)
+$messageBox = New-Object System.Windows.Forms.RichTextBox
+$messageBox.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 10)
+$messageBox.ForeColor = $messageTextColor
+$messageBox.BackColor = [System.Drawing.Color]::White
+$messageBox.BorderStyle = 'None'
+$messageBox.ReadOnly = $true
+$messageBox.TabStop = $false
+$messageBox.DetectUrls = $false
+$messageBox.ScrollBars = 'None'
+$messageBox.ShortcutsEnabled = $false
+$messageBox.Cursor = [System.Windows.Forms.Cursors]::Default
+$messageBox.Location = New-Object System.Drawing.Point(80, 50)
+$messageBox.Size = New-Object System.Drawing.Size(($width - 104), 64)
+Set-NotifyRichMessageText -Box $messageBox -Text $Message
+$form.Controls.Add($messageBox)
 
 $topLine = New-Object System.Windows.Forms.Panel
 $topLine.Location = New-Object System.Drawing.Point(7, 0)
