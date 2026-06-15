@@ -33,7 +33,7 @@ public static class CodexHistorySyncWindow {
 [System.Windows.Forms.Application]::EnableVisualStyles()
 [System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException)
 
-$script:AppVersion = '2026.06.15.03'
+$script:AppVersion = '2026.06.15.04'
 $script:AppAuthor = 'Joff Pan'
 $script:GitHubRepo = 'zhuofupan/codex-history-sync-portable'
 $script:GitHubUrl = "https://github.com/$script:GitHubRepo"
@@ -309,11 +309,13 @@ $script:UiStrings = @{
         ImportCcConfig       = '加载cc-switch.db文件'
         Settings             = '软件配置文件'
         LaunchTerminal       = '从终端启动'
-        LoadCheckedRecord    = '启动时加载聊天'
+        LaunchModel          = '模型'
+        ReasoningEffort      = '智能'
+        DefaultOption        = '默认'
+        LoadCheckedRecord    = '+聊天'
         PowerShellLaunch     = 'PowerShell启动'
-        ApprovalNeverLaunch  = '完全访问(-a never)'
+        ApprovalNeverLaunch  = '完全访问'
         CompletionPopup      = '弹窗提醒'
-        TestPopup            = '测试弹窗'
         Help                 = '帮助'
         CheckUpdate          = '检查更新'
         GridSelect           = '选择'
@@ -368,11 +370,13 @@ $script:UiStrings = @{
         ImportCcConfig       = 'Load cc-switch.db'
         Settings             = 'Software Config'
         LaunchTerminal       = 'Launch Terminal'
-        LoadCheckedRecord    = 'Load Chat on Launch'
+        LaunchModel          = 'Model'
+        ReasoningEffort      = 'Reasoning'
+        DefaultOption        = 'Default'
+        LoadCheckedRecord    = '+ Chat'
         PowerShellLaunch     = 'PowerShell'
-        ApprovalNeverLaunch  = 'Full Access (-a never)'
+        ApprovalNeverLaunch  = 'Full Access'
         CompletionPopup      = 'Popup Alert'
-        TestPopup            = 'Test Popup'
         Help                 = 'Help'
         CheckUpdate          = 'Check Update'
         GridSelect           = 'Select'
@@ -712,7 +716,10 @@ function Reset-ProviderCombo {
     if (Test-SameHistoryProvider $PreferredProvider $ExcludedProvider) { $PreferredProvider = '' }
 
     $Combo.Items.Clear()
-    foreach ($provider in $Providers) {
+    $sortedProviders = @($Providers | Sort-Object `
+            @{ Expression = { Get-ProviderLabel $_ }; Ascending = $true }, `
+            @{ Expression = { [string]$_ }; Ascending = $true })
+    foreach ($provider in $sortedProviders) {
         if (Test-SameHistoryProvider $provider $ExcludedProvider) { continue }
         [void]$Combo.Items.Add((Get-ProviderLabel $provider))
     }
@@ -780,7 +787,10 @@ function Reset-CcSwitchAccountCombo {
     $skippedInvalidOfficial = 0
     $history = Normalize-ProviderKey $HistoryProvider
 
-    foreach ($provider in $Providers) {
+    $sortedProviders = @($Providers | Sort-Object `
+            @{ Expression = { Get-CcSwitchAccountLabel $_ }; Ascending = $true }, `
+            @{ Expression = { [string]$_.id }; Ascending = $true })
+    foreach ($provider in $sortedProviders) {
         if ($history -eq 'openai' -and
             (Test-CcSwitchOfficialProvider $provider) -and
             -not (Test-CcSwitchOfficialProviderHasOAuthAuth $provider)) {
@@ -833,6 +843,148 @@ function Reset-CcSwitchAccountCombo {
     }
 
     Write-DiagnosticLog ("CcSwitch combo reset history='{0}' selected='{1}' skippedInvalidOfficial={2} items=[{3}]" -f $HistoryProvider, ([string]$script:CodexProviderCombo.SelectedItem), $skippedInvalidOfficial, ($shownLabels.ToArray() -join ', '))
+}
+
+function Add-ComboItemUnique {
+    param(
+        [Parameter(Mandatory)]$Combo,
+        [AllowNull()][string]$Value
+    )
+
+    $text = ([string]$Value).Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) { return }
+    foreach ($item in $Combo.Items) {
+        if ([string]::Equals([string]$item, $text, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return
+        }
+    }
+    [void]$Combo.Items.Add($text)
+}
+
+function Test-DefaultLaunchOptionText {
+    param([AllowNull()][string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $true }
+    $text = $Value.Trim()
+    foreach ($label in @('默认', 'Default', (Get-UiText 'DefaultOption'))) {
+        if ([string]::Equals($text, $label, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Get-SelectedLaunchModel {
+    if (-not $script:LaunchModelCombo) { return '' }
+    $value = [string]$script:LaunchModelCombo.Text
+    if (Test-DefaultLaunchOptionText $value) { return '' }
+    return $value.Trim()
+}
+
+function Get-SelectedLaunchReasoningEffort {
+    if (-not $script:LaunchReasoningCombo) { return '' }
+    $value = [string]$script:LaunchReasoningCombo.Text
+    if (Test-DefaultLaunchOptionText $value) { return '' }
+    return $value.Trim()
+}
+
+function Get-CodexConfigTextForLaunchOptions {
+    try {
+        if (Test-CodexHomeReady) {
+            $configPath = Join-Path $CodexHome 'config.toml'
+            if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+                return (Get-Content -LiteralPath $configPath -Raw)
+            }
+        }
+    }
+    catch {
+        return ''
+    }
+    return ''
+}
+
+function Get-LaunchModelOptionValues {
+    $values = New-Object System.Collections.Generic.List[string]
+
+    $configText = Get-CodexConfigTextForLaunchOptions
+    if (-not [string]::IsNullOrWhiteSpace($configText)) {
+        $model = Get-CodexConfigStringValue $configText 'model'
+        if (-not [string]::IsNullOrWhiteSpace($model) -and -not $values.Contains($model)) { $values.Add($model) }
+    }
+
+    foreach ($provider in @($script:CcSwitchCodexProviders)) {
+        try {
+            $settings = [string]$provider.settings_config | ConvertFrom-Json
+            $model = Get-CodexConfigStringValue ([string]$settings.config) 'model'
+            if (-not [string]::IsNullOrWhiteSpace($model) -and -not $values.Contains($model)) { $values.Add($model) }
+        }
+        catch {
+            continue
+        }
+    }
+
+    foreach ($model in @('gpt-5.5', 'gpt-5.1-codex', 'gpt-5-codex', 'gpt-5.1', 'gpt-5', 'o4-mini', 'o3')) {
+        if (-not $values.Contains($model)) { $values.Add($model) }
+    }
+    return $values.ToArray()
+}
+
+function Reset-LaunchModelOptions {
+    if (-not $script:LaunchModelCombo) { return }
+    $current = Get-SelectedLaunchModel
+    $script:LaunchModelCombo.Items.Clear()
+    Add-ComboItemUnique -Combo $script:LaunchModelCombo -Value (Get-UiText 'DefaultOption')
+    foreach ($model in @(Get-LaunchModelOptionValues)) {
+        Add-ComboItemUnique -Combo $script:LaunchModelCombo -Value $model
+    }
+    if (-not [string]::IsNullOrWhiteSpace($current)) {
+        Add-ComboItemUnique -Combo $script:LaunchModelCombo -Value $current
+        $script:LaunchModelCombo.Text = $current
+    }
+    elseif ($script:LaunchModelCombo.Items.Count -gt 0) {
+        $script:LaunchModelCombo.SelectedIndex = 0
+    }
+}
+
+function Reset-LaunchReasoningOptions {
+    if (-not $script:LaunchReasoningCombo) { return }
+    $current = Get-SelectedLaunchReasoningEffort
+    $script:LaunchReasoningCombo.Items.Clear()
+    Add-ComboItemUnique -Combo $script:LaunchReasoningCombo -Value (Get-UiText 'DefaultOption')
+    foreach ($effort in @('minimal', 'low', 'medium', 'high', 'xhigh')) {
+        Add-ComboItemUnique -Combo $script:LaunchReasoningCombo -Value $effort
+    }
+    if (-not [string]::IsNullOrWhiteSpace($current)) {
+        Add-ComboItemUnique -Combo $script:LaunchReasoningCombo -Value $current
+        $script:LaunchReasoningCombo.SelectedItem = $current
+    }
+    elseif ($script:LaunchReasoningCombo.Items.Count -gt 0) {
+        $script:LaunchReasoningCombo.SelectedIndex = 0
+    }
+}
+
+function Set-LaunchModelSelection {
+    param([AllowNull()][string]$Value)
+
+    if (-not $script:LaunchModelCombo) { return }
+    if (Test-DefaultLaunchOptionText $Value) {
+        $script:LaunchModelCombo.SelectedIndex = 0
+        return
+    }
+    Add-ComboItemUnique -Combo $script:LaunchModelCombo -Value $Value
+    $script:LaunchModelCombo.Text = $Value.Trim()
+}
+
+function Set-LaunchReasoningSelection {
+    param([AllowNull()][string]$Value)
+
+    if (-not $script:LaunchReasoningCombo) { return }
+    if (Test-DefaultLaunchOptionText $Value) {
+        $script:LaunchReasoningCombo.SelectedIndex = 0
+        return
+    }
+    Add-ComboItemUnique -Combo $script:LaunchReasoningCombo -Value $Value
+    $script:LaunchReasoningCombo.SelectedItem = $Value.Trim()
 }
 
 function Get-CurrentSourceProvider {
@@ -1268,14 +1420,14 @@ function Layout-ToolbarGroups {
     foreach ($button in @(
             $swapButton, $refreshButton, $selectAllButton, $clearSelectionButton, $cloneButton, $syncButton, $mirrorButton,
             $selectCodexHomeButton, $openRecordFolderButton, $openCodexFolderButton, $selectCcSwitchHomeButton, $openConfigButton,
-            $openCodexButton, $testNotifyButton, $helpButton, $updateButton
+            $openCodexButton, $helpButton, $updateButton
         )) {
         Set-ControlWidthForText -Control $button -MinWidth 58 -Extra 30
     }
     foreach ($check in @($script:IncludeArchivedBox, $script:LoadCheckedRecordBox, $script:UsePowerShellLaunchBox, $script:ApprovalNeverLaunchBox, $script:TurnEndedNotifyBox)) {
         Set-ControlWidthForText -Control $check -MinWidth 58 -Extra 28
     }
-    foreach ($label in @($sourceLabel, $targetLabel, $cwdLabel, $limitLabel, $ccProviderLabel)) {
+    foreach ($label in @($sourceLabel, $targetLabel, $cwdLabel, $limitLabel, $ccProviderLabel, $launchModelLabel, $launchReasoningLabel)) {
         Set-ControlWidthForText -Control $label -MinWidth 42 -Extra 8
     }
 
@@ -1316,13 +1468,16 @@ function Layout-ToolbarGroups {
     Resize-GroupToFitControls -Group $pathGroup -MinWidth 0 -MinHeight 86 -RightPadding 18
 
     Move-Control $ccProviderLabel 14 24
-    Move-Control $script:CodexProviderCombo ($ccProviderLabel.Right + 6) 24 170 24
-    Move-Control $openCodexButton ($script:CodexProviderCombo.Right + 12) 22
+    Move-Control $script:CodexProviderCombo ($ccProviderLabel.Right + 6) 24 150 24
+    Move-Control $launchModelLabel ($script:CodexProviderCombo.Right + 10) 24
+    Move-Control $script:LaunchModelCombo ($launchModelLabel.Right + 6) 24 110 24
+    Move-Control $launchReasoningLabel ($script:LaunchModelCombo.Right + 10) 24
+    Move-Control $script:LaunchReasoningCombo ($launchReasoningLabel.Right + 6) 24 76 24
+    Move-Control $openCodexButton ($script:LaunchReasoningCombo.Right + 12) 22
     Move-Control $script:UsePowerShellLaunchBox ($openCodexButton.Right + 12) 25
     Move-Control $script:ApprovalNeverLaunchBox ($script:UsePowerShellLaunchBox.Right + 12) 25
     Move-Control $script:LoadCheckedRecordBox ($script:ApprovalNeverLaunchBox.Right + 12) 25
     Move-Control $script:TurnEndedNotifyBox ($script:LoadCheckedRecordBox.Right + 12) 25
-    Move-Control $testNotifyButton ($script:TurnEndedNotifyBox.Right + 12) 22
     Resize-GroupToFitControls -Group $launchGroup -MinWidth 0 -MinHeight 58 -RightPadding 18
 
     Move-Control $helpButton 14 22
@@ -1382,13 +1537,16 @@ function Apply-UiLanguage {
     Set-ControlText $selectCcSwitchHomeButton 'ImportCcConfig'
     Set-ControlText $openConfigButton 'Settings'
     Set-ControlText $openCodexButton 'LaunchTerminal'
+    Set-ControlText $launchModelLabel 'LaunchModel'
+    Set-ControlText $launchReasoningLabel 'ReasoningEffort'
     Set-ControlText $script:LoadCheckedRecordBox 'LoadCheckedRecord'
     Set-ControlText $script:UsePowerShellLaunchBox 'PowerShellLaunch'
     Set-ControlText $script:ApprovalNeverLaunchBox 'ApprovalNeverLaunch'
     Set-ControlText $script:TurnEndedNotifyBox 'CompletionPopup'
-    Set-ControlText $testNotifyButton 'TestPopup'
     Set-ControlText $helpButton 'Help'
     Set-ControlText $updateButton 'CheckUpdate'
+    Reset-LaunchModelOptions
+    Reset-LaunchReasoningOptions
 
     $gridHeaders = @{
         Selected    = 'GridSelect'
@@ -1742,9 +1900,10 @@ $(Get-CcSwitchHomeHelpText)
 - 配置文件只写本机路径和默认选择，不要写 API key、token 或 auth.json 内容。
 
 【从终端启动】
-- 勾选【启动时加载聊天】：自动恢复当前选中的聊天。
-- 取消【启动时加载聊天】：在当前目录创建新对话。
+- 勾选【+聊天】：自动恢复当前选中的聊天。
+- 取消【+聊天】：在当前目录创建新对话。
 - 列表最左侧的勾选列只用于同步勾选记录，不再决定启动时是否加载聊天。
+- 【模型】和【智能】为启动时覆盖项，选择默认时使用当前 cc-switch 节点或 config.toml 的配置。
 - 勾选【PowerShell启动】时优先用 PowerShell，否则优先用 CMD；找不到所选终端时会自动退回另一种。
 
 【更新】
@@ -1869,11 +2028,12 @@ function Show-AppHelp {
     Add-HelpRichLine -Box $box -Text ''
 
     Add-HelpRichLine -Box $box -Text '从终端启动' -Font $sectionFont -Color $blue
-    Add-HelpRichLine -Box $box -Text '- 勾选【启动时加载聊天】：自动恢复当前选中的聊天。' -Font $bodyFont -Color $slate
-    Add-HelpRichLine -Box $box -Text '- 取消【启动时加载聊天】：在当前目录创建新对话。' -Font $bodyFont -Color $slate
+    Add-HelpRichLine -Box $box -Text '- 勾选【+聊天】：自动恢复当前选中的聊天。' -Font $bodyFont -Color $slate
+    Add-HelpRichLine -Box $box -Text '- 取消【+聊天】：在当前目录创建新对话。' -Font $bodyFont -Color $slate
     Add-HelpRichLine -Box $box -Text '- 列表最左侧的勾选列只用于同步勾选记录，不再决定启动时是否加载聊天。' -Font $bodyFont -Color $slate
+    Add-HelpRichLine -Box $box -Text '- 【模型】和【智能】为启动时覆盖项，选择默认时使用当前 cc-switch 节点或 config.toml 的配置。' -Font $bodyFont -Color $slate
     Add-HelpRichLine -Box $box -Text '- 勾选【PowerShell启动】时优先用 PowerShell；取消勾选时优先用 CMD。' -Font $bodyFont -Color $slate
-    Add-HelpRichLine -Box $box -Text '- 勾选【完全访问(-a never)】时启动命令会追加 Codex 官方 bypass 参数，跳过审批并关闭沙箱。' -Font $bodyFont -Color $slate
+    Add-HelpRichLine -Box $box -Text '- 勾选【完全访问】时启动命令会追加 Codex 官方 bypass 参数，跳过审批并关闭沙箱。' -Font $bodyFont -Color $slate
     Add-HelpRichLine -Box $box -Text '- 如果检测到权限审批请求等待超过 10 秒，会弹出橙色提醒。' -Font $bodyFont -Color $slate
     Add-HelpRichLine -Box $box -Text ''
 
@@ -2137,6 +2297,8 @@ function Get-CurrentAppState {
         usePowerShellTerminal  = if ($script:UsePowerShellLaunchBox) { [bool]$script:UsePowerShellLaunchBox.Checked } else { $false }
         approvalNeverOnLaunch  = if ($script:ApprovalNeverLaunchBox) { [bool]$script:ApprovalNeverLaunchBox.Checked } else { $true }
         loadChatOnLaunch      = if ($script:LoadCheckedRecordBox) { [bool]$script:LoadCheckedRecordBox.Checked } else { $true }
+        launchModel            = Get-SelectedLaunchModel
+        launchReasoningEffort  = Get-SelectedLaunchReasoningEffort
         uiLanguage             = [string]$script:UiLanguage
         windowWidth            = if ($script:Form) { [int]$script:Form.Width } else { 1320 }
         windowWidthByLanguage  = Get-LanguageWindowWidthsForConfig
@@ -2227,6 +2389,8 @@ function Import-AppConfig {
         if ($script:LoadCheckedRecordBox) {
             $script:LoadCheckedRecordBox.Checked = Get-ConfigBoolValue -Config $config -Names @('loadChatOnLaunch', 'loadCheckedRecordOnLaunch', 'resumeCheckedRecordOnLaunch', 'loadSelectedRecordOnLaunch') -Default ([bool]$script:LoadCheckedRecordBox.Checked)
         }
+        Set-LaunchModelSelection (Get-ConfigStringValue -Config $config -Names @('launchModel', 'modelOnLaunch', 'codexModel'))
+        Set-LaunchReasoningSelection (Get-ConfigStringValue -Config $config -Names @('launchReasoningEffort', 'reasoningEffortOnLaunch', 'modelReasoningEffortOnLaunch'))
         Import-LanguageWindowWidths (Get-ConfigPropertyValue -Config $config -Names @('windowWidthByLanguage', 'windowWidthsByLanguage'))
         $windowWidth = Get-ConfigIntValue -Config $config -Names @('windowWidth') -Default 0
         if ($windowWidth -gt 0) {
@@ -2368,9 +2532,11 @@ function New-AppConfigObject {
             defaultSourceProvider     = 'Codex 历史记录里的 model_provider 桶，例如 openai、custom、rightcode。可参考 knownCodexHistoryProviders。'
             defaultTargetProvider     = '同步目标 model_provider 桶。'
             defaultCcSwitchNode       = '从终端启动时使用的 cc-switch Codex 节点名字或 id。可参考 knownCcSwitchNodes。'
+            launchModel               = '从终端启动 Codex 时追加的模型参数；留空或 default 表示使用当前节点/config.toml 默认模型。'
+            launchReasoningEffort     = '从终端启动 Codex 时追加的 model_reasoning_effort；留空或 default 表示使用当前节点/config.toml 默认智能程度。'
             usePowerShellTerminal     = 'true 表示从终端启动时优先用 PowerShell；false 表示优先用 CMD。'
             approvalNeverOnLaunch     = 'true 表示从终端启动 Codex 时追加 --dangerously-bypass-approvals-and-sandbox，跳过审批并关闭沙箱。'
-            loadChatOnLaunch          = 'true 表示从终端启动时，如果【启动时加载聊天】已开启，就自动恢复当前选中的聊天；false 表示在当前目录下新建对话。'
+            loadChatOnLaunch          = 'true 表示从终端启动时，如果【+聊天】已开启，就自动恢复当前选中的聊天；false 表示在当前目录下新建对话。'
             lastSavedAt               = '软件最后一次自动保存界面偏好的时间。'
             uiLanguage                = '界面语言。zh-CN 表示中文，en-US 表示英文。'
             windowWidthByLanguage     = '分别记录中文和英文界面下的窗口宽度，避免切换语言时互相覆盖。'
@@ -2386,6 +2552,8 @@ function New-AppConfigObject {
         defaultSourceProvider      = [string]$state.defaultSourceProvider
         defaultTargetProvider      = [string]$state.defaultTargetProvider
         defaultCcSwitchNode        = [string]$state.defaultCcSwitchNode
+        launchModel                = [string]$state.launchModel
+        launchReasoningEffort      = [string]$state.launchReasoningEffort
         directoryFilter            = [string]$state.directoryFilter
         limit                      = [int]$state.limit
         includeArchived            = [bool]$state.includeArchived
@@ -2457,6 +2625,8 @@ function Save-AppPreferencesToConfigFile {
             defaultSourceProvider     = [string]$state.defaultSourceProvider
             defaultTargetProvider     = [string]$state.defaultTargetProvider
             defaultCcSwitchNode       = [string]$state.defaultCcSwitchNode
+            launchModel               = [string]$state.launchModel
+            launchReasoningEffort     = [string]$state.launchReasoningEffort
             directoryFilter           = [string]$state.directoryFilter
             limit                     = [int]$state.limit
             includeArchived           = [bool]$state.includeArchived
@@ -2476,7 +2646,9 @@ function Save-AppPreferencesToConfigFile {
             $config.PSObject.Properties.Remove('loadCheckedRecordOnLaunch')
         }
         if ($config.PSObject.Properties['_help'] -and $config._help) {
-            Set-ObjectProperty -Object $config._help -Name 'loadChatOnLaunch' -Value 'true 表示从终端启动时，如果【启动时加载聊天】已开启，就自动恢复当前选中的聊天；false 表示在当前目录下新建对话。'
+            Set-ObjectProperty -Object $config._help -Name 'launchModel' -Value '从终端启动 Codex 时追加的模型参数；留空或 default 表示使用当前节点/config.toml 默认模型。'
+            Set-ObjectProperty -Object $config._help -Name 'launchReasoningEffort' -Value '从终端启动 Codex 时追加的 model_reasoning_effort；留空或 default 表示使用当前节点/config.toml 默认智能程度。'
+            Set-ObjectProperty -Object $config._help -Name 'loadChatOnLaunch' -Value 'true 表示从终端启动时，如果【+聊天】已开启，就自动恢复当前选中的聊天；false 表示在当前目录下新建对话。'
             if ($config._help.PSObject.Properties['loadCheckedRecordOnLaunch']) {
                 $config._help.PSObject.Properties.Remove('loadCheckedRecordOnLaunch')
             }
@@ -2511,6 +2683,8 @@ function Sync-AppConfigFileWithDetectedInfo {
                     'defaultSourceProvider',
                     'defaultTargetProvider',
                     'defaultCcSwitchNode',
+                    'launchModel',
+                    'launchReasoningEffort',
                     'directoryFilter',
                     'limit',
                     'includeArchived',
@@ -3142,7 +3316,9 @@ function Start-CodexInDirectory {
         [bool]$DisableApps,
         [bool]$ApprovalNever,
         [AllowNull()][string]$ResumeId,
-        [bool]$PreferPowerShell
+        [bool]$PreferPowerShell,
+        [AllowNull()][string]$Model,
+        [AllowNull()][string]$ReasoningEffort
     )
 
     $codexExe = Get-CodexExecutable
@@ -3153,6 +3329,14 @@ function Start-CodexInDirectory {
     if ($DisableApps) {
         $commonArgs.Add('--disable')
         $commonArgs.Add('apps')
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Model)) {
+        $commonArgs.Add('-m')
+        $commonArgs.Add($Model.Trim())
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ReasoningEffort)) {
+        $commonArgs.Add('-c')
+        $commonArgs.Add(('model_reasoning_effort={0}' -f $ReasoningEffort.Trim()))
     }
     if ($ApprovalNever) {
         if (Test-CodexSupportsBypassFullAccess -CodexExe $codexExe) {
@@ -4278,33 +4462,6 @@ function Apply-TurnEndedNotifyToCurrentConfig {
     Append-Log "已写入弹窗提醒 CLI notify 配置：$configPath"
 }
 
-function Show-TestTurnEndedNotify {
-    if ([string]::IsNullOrWhiteSpace($script:NotifierPath) -or
-        -not (Test-Path -LiteralPath $script:NotifierPath)) {
-        throw "未找到会话结束提醒脚本：$script:NotifierPath"
-    }
-
-    $message = "账号：custom | 示例项目`r`n聊天：019eb473`r`n任务：测试弹窗显示完成摘要"
-    $messageBase64 = [Convert]::ToBase64String($script:Utf8NoBom.GetBytes($message))
-    Start-Process -FilePath powershell.exe -ArgumentList @(
-        '-NoProfile',
-        '-STA',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-WindowStyle',
-        'Hidden',
-        '-File',
-        $script:NotifierPath,
-        '-CodexHome',
-        $CodexHome,
-        '-MessageBase64',
-        $messageBase64,
-        '-Seconds',
-        '8'
-    ) -WindowStyle Hidden | Out-Null
-    Append-Log '已触发测试弹窗。'
-}
-
 function Stop-ExistingTurnCompleteMonitor {
     try {
         $currentPid = [System.Diagnostics.Process]::GetCurrentProcess().Id
@@ -4596,9 +4753,13 @@ function Invoke-LaunchForProvider {
     $disableApps = [bool]$script:DisableCodexAppsOnFast -and ((Get-CodexServiceTier (Get-Content -LiteralPath (Join-Path $CodexHome 'config.toml') -Raw)) -eq 'fast')
     $approvalNever = $script:ApprovalNeverLaunchBox -and [bool]$script:ApprovalNeverLaunchBox.Checked
     $preferPowerShell = $script:UsePowerShellLaunchBox -and [bool]$script:UsePowerShellLaunchBox.Checked
-    $launchShell = Start-CodexInDirectory -Directory $directory -DisableApps:$disableApps -ApprovalNever:$approvalNever -ResumeId $resumeId -PreferPowerShell:$preferPowerShell
+    $launchModel = Get-SelectedLaunchModel
+    $launchReasoningEffort = Get-SelectedLaunchReasoningEffort
+    $launchShell = Start-CodexInDirectory -Directory $directory -DisableApps:$disableApps -ApprovalNever:$approvalNever -ResumeId $resumeId -PreferPowerShell:$preferPowerShell -Model $launchModel -ReasoningEffort $launchReasoningEffort
     $launchFlags = @()
     if ($disableApps) { $launchFlags += '--disable apps' }
+    if (-not [string]::IsNullOrWhiteSpace($launchModel)) { $launchFlags += "-m $launchModel" }
+    if (-not [string]::IsNullOrWhiteSpace($launchReasoningEffort)) { $launchFlags += "model_reasoning_effort=$launchReasoningEffort" }
     if ($approvalNever) {
         if ([bool]$script:CodexSupportsBypassFullAccess) {
             $launchFlags += '--dangerously-bypass-approvals-and-sandbox'
@@ -5045,6 +5206,8 @@ function Refresh-Providers {
             $ccSwitchProviders = @(Repair-CcSwitchOfficialProviderRows -Providers $ccSwitchProviders)
         }
         $script:CcSwitchCodexProviders = $ccSwitchProviders
+        Reset-LaunchModelOptions
+        Reset-LaunchReasoningOptions
 
         if (-not (Test-CodexHomeReady)) {
             if ($script:SourceCombo) { $script:SourceCombo.Items.Clear() }
@@ -5361,12 +5524,28 @@ $script:CodexProviderCombo.DropDownStyle = 'DropDownList'
 $script:CodexProviderCombo.Location = New-Object System.Drawing.Point(110, 24)
 $script:CodexProviderCombo.Size = New-Object System.Drawing.Size(170, 24)
 $launchGroup.Controls.Add($script:CodexProviderCombo)
+$launchModelLabel = New-Label '模型' 292 24 36
+$launchGroup.Controls.Add($launchModelLabel)
+$script:LaunchModelCombo = New-Object System.Windows.Forms.ComboBox
+$script:LaunchModelCombo.DropDownStyle = 'DropDown'
+$script:LaunchModelCombo.AutoCompleteMode = 'SuggestAppend'
+$script:LaunchModelCombo.AutoCompleteSource = 'ListItems'
+$script:LaunchModelCombo.Location = New-Object System.Drawing.Point(330, 24)
+$script:LaunchModelCombo.Size = New-Object System.Drawing.Size(110, 24)
+$launchGroup.Controls.Add($script:LaunchModelCombo)
+$launchReasoningLabel = New-Label '智能' 450 24 36
+$launchGroup.Controls.Add($launchReasoningLabel)
+$script:LaunchReasoningCombo = New-Object System.Windows.Forms.ComboBox
+$script:LaunchReasoningCombo.DropDownStyle = 'DropDownList'
+$script:LaunchReasoningCombo.Location = New-Object System.Drawing.Point(488, 24)
+$script:LaunchReasoningCombo.Size = New-Object System.Drawing.Size(76, 24)
+$launchGroup.Controls.Add($script:LaunchReasoningCombo)
 $openCodexButton = New-Button '从终端启动' 292 22 110 'Primary'
 $launchGroup.Controls.Add($openCodexButton)
 $script:LoadCheckedRecordBox = New-Object System.Windows.Forms.CheckBox
-$script:LoadCheckedRecordBox.Text = '启动时加载聊天'
+$script:LoadCheckedRecordBox.Text = '+聊天'
 $script:LoadCheckedRecordBox.Location = New-Object System.Drawing.Point(414, 25)
-$script:LoadCheckedRecordBox.Size = New-Object System.Drawing.Size(140, 22)
+$script:LoadCheckedRecordBox.Size = New-Object System.Drawing.Size(70, 22)
 $script:LoadCheckedRecordBox.Checked = $true
 $launchGroup.Controls.Add($script:LoadCheckedRecordBox)
 $script:UsePowerShellLaunchBox = New-Object System.Windows.Forms.CheckBox
@@ -5376,9 +5555,9 @@ $script:UsePowerShellLaunchBox.Size = New-Object System.Drawing.Size(118, 22)
 $script:UsePowerShellLaunchBox.Checked = $false
 $launchGroup.Controls.Add($script:UsePowerShellLaunchBox)
 $script:ApprovalNeverLaunchBox = New-Object System.Windows.Forms.CheckBox
-$script:ApprovalNeverLaunchBox.Text = '完全访问(-a never)'
+$script:ApprovalNeverLaunchBox.Text = '完全访问'
 $script:ApprovalNeverLaunchBox.Location = New-Object System.Drawing.Point(676, 25)
-$script:ApprovalNeverLaunchBox.Size = New-Object System.Drawing.Size(140, 22)
+$script:ApprovalNeverLaunchBox.Size = New-Object System.Drawing.Size(86, 22)
 $script:ApprovalNeverLaunchBox.Checked = $true
 $launchGroup.Controls.Add($script:ApprovalNeverLaunchBox)
 $script:TurnEndedNotifyBox = New-Object System.Windows.Forms.CheckBox
@@ -5387,8 +5566,6 @@ $script:TurnEndedNotifyBox.Location = New-Object System.Drawing.Point(824, 25)
 $script:TurnEndedNotifyBox.Size = New-Object System.Drawing.Size(82, 22)
 $script:TurnEndedNotifyBox.Checked = $true
 $launchGroup.Controls.Add($script:TurnEndedNotifyBox)
-$testNotifyButton = New-Button '测试弹窗' 914 22 94
-$launchGroup.Controls.Add($testNotifyButton)
 
 $supportGroup = New-GroupBox '帮助与更新' 904 166 226 58
 $script:Form.Controls.Add($supportGroup)
@@ -5727,17 +5904,6 @@ $openCodexButton.Add_Click({
         }
     })
 
-$testNotifyButton.Add_Click({
-        try {
-            Apply-TurnEndedNotifyToCurrentConfig
-            Start-TurnCompleteMonitor
-            Show-TestTurnEndedNotify
-        }
-        catch {
-            Show-GuiError $_
-        }
-    })
-
 $script:SourceCombo.Add_SelectedIndexChanged({
         if (-not $script:SuppressThreadRefresh) {
             Update-TargetProviderComboForCurrentSource
@@ -5753,6 +5919,21 @@ $script:TargetCombo.Add_SelectedIndexChanged({
         }
     })
 $script:CodexProviderCombo.Add_SelectedIndexChanged({
+        if (-not $script:SuppressThreadRefresh) {
+            Save-AppState
+        }
+    })
+$script:LaunchModelCombo.Add_SelectedIndexChanged({
+        if (-not $script:SuppressThreadRefresh) {
+            Save-AppState
+        }
+    })
+$script:LaunchModelCombo.Add_Leave({
+        if (-not $script:SuppressThreadRefresh) {
+            Save-AppState
+        }
+    })
+$script:LaunchReasoningCombo.Add_SelectedIndexChanged({
         if (-not $script:SuppressThreadRefresh) {
             Save-AppState
         }

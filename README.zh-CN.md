@@ -97,10 +97,11 @@ GUI 里的主要控件如下：
 | `同步全部` | 同步当前源账号下列出的记录 |
 | `双向同步` | 在两个 provider 桶之间互相同步 |
 | `cc-switch供应商` | `从终端启动` 时使用哪个 cc-switch Codex 供应商 |
-| `从终端启动` | 以管理员身份打开终端；终端第一行会显示 `[管理员模式]` 或 `[非管理员]`；开启 `启动时加载聊天` 时恢复当前选中聊天，关闭时在当前目录新建对话 |
-| `启动时加载聊天` | 开启后，当前选中聊天会执行 `codex resume <thread-id>`；列表最左侧勾选列只用于同步勾选记录 |
+| `从终端启动` | 以管理员身份打开终端；终端第一行会显示 `[管理员模式]` 或 `[非管理员]`；开启 `+聊天` 时恢复当前选中聊天，关闭时在当前目录新建对话 |
+| `+聊天` | 开启后，当前选中聊天会执行 `codex resume <thread-id>`；列表最左侧勾选列只用于同步勾选记录 |
+| `模型` / `智能` | 启动 Codex 时临时追加 `-m` 和 `model_reasoning_effort` 覆盖项；选择默认时使用当前节点或 `config.toml` 配置 |
 | `PowerShell启动` | 勾选时优先用 PowerShell 启动；取消勾选时优先用 CMD 启动；找不到首选终端时会自动退回另一种 |
-| `完全访问(-a never)` | 从终端启动 Codex 时追加 `--dangerously-bypass-approvals-and-sandbox`；新配置默认勾选 |
+| `完全访问` | 从终端启动 Codex 时追加 `--dangerously-bypass-approvals-and-sandbox`；新配置默认勾选 |
 | 标题栏 `GitHub` 右侧语言文字 | 在中文和英文界面之间切换 |
 | `软件配置文件` | 打开根目录 `codex-history-sync-config.json`；首次会自动生成，保存后 GUI 自动刷新 |
 | `帮助` | 显示加载codex账号、cc-switch.db、启动、更新等说明，并复制 Everything 搜索关键词 |

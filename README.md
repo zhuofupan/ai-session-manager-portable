@@ -100,10 +100,11 @@ The GUI opens with these main controls:
 | `同步全部` | Copy all listed source rows to the target provider |
 | `双向同步` | Sync both directions between the selected providers |
 | `cc-switch供应商` | cc-switch Codex provider used by `从终端启动` |
-| `从终端启动` | Open an elevated terminal; the first terminal line shows `[管理员模式]` or `[非管理员]`; resume the current row when `启动时加载聊天` is enabled, or start a new chat when disabled |
-| `启动时加载聊天` | When enabled, the current row launches with `codex resume <thread-id>`; the left checkbox column is only for checked-row sync |
+| `从终端启动` | Open an elevated terminal; the first terminal line shows `[管理员模式]` or `[非管理员]`; resume the current row when `+聊天` is enabled, or start a new chat when disabled |
+| `+聊天` | When enabled, the current row launches with `codex resume <thread-id>`; the left checkbox column is only for checked-row sync |
+| `模型` / `智能` | Temporarily pass `-m` and `model_reasoning_effort` launch overrides to Codex; default uses the selected node or `config.toml` |
 | `PowerShell启动` | Prefer PowerShell when checked; prefer CMD when unchecked; fall back automatically if the preferred terminal is unavailable |
-| `完全访问(-a never)` | Launch Codex with `--dangerously-bypass-approvals-and-sandbox`; checked by default for new configs |
+| `完全访问` | Launch Codex with `--dangerously-bypass-approvals-and-sandbox`; checked by default for new configs |
 | language text next to `GitHub` | Switch the GUI between Chinese and English |
 | `软件配置文件` | Open root `codex-history-sync-config.json`; the GUI creates it if missing and reloads it after saves |
 | `帮助` | Show path/account/start/update guidance and copy Everything search terms |
