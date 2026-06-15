@@ -1328,9 +1328,7 @@ else {
 $iconText = if ($isApprovalWait) { '!' } else { 'OK' }
 $iconBackColor = $accentColor
 $messageTextColor = [System.Drawing.Color]::FromArgb(55, 65, 81)
-$messageMutedColor = [System.Drawing.Color]::FromArgb(107, 114, 128)
 $messageAccountColor = [System.Drawing.Color]::FromArgb(37, 99, 235)
-$messageDirectoryColor = [System.Drawing.Color]::FromArgb(13, 148, 136)
 $messageThreadColor = [System.Drawing.Color]::FromArgb(124, 58, 237)
 
 function Play-NotifySound {
@@ -1354,113 +1352,6 @@ function Play-NotifySound {
     }
 }
 
-function Split-NotifyLinePrefix {
-    param([AllowNull()][string]$Line)
-
-    if ([string]::IsNullOrWhiteSpace($Line)) { return $null }
-    $match = [System.Text.RegularExpressions.Regex]::Match([string]$Line, '^(.{1,16}?[:：])(.*)$')
-    if (-not $match.Success) { return $null }
-    return @($match.Groups[1].Value, $match.Groups[2].Value)
-}
-
-function Measure-NotifyTextWidth {
-    param(
-        [AllowNull()][string]$Text,
-        [Parameter(Mandatory)]$Font,
-        [int]$MinWidth = 0,
-        [int]$MaxWidth = 1000
-    )
-
-    if ($null -eq $Text) { $Text = '' }
-    $width = [System.Windows.Forms.TextRenderer]::MeasureText([string]$Text, $Font).Width + 2
-    return [Math]::Max($MinWidth, [Math]::Min($MaxWidth, $width))
-}
-
-function Add-NotifySegmentLabel {
-    param(
-        [Parameter(Mandatory)]$Parent,
-        [AllowNull()][string]$Text,
-        [int]$X,
-        [int]$Y,
-        [int]$Width,
-        [Parameter(Mandatory)][System.Drawing.Color]$Color,
-        [System.Drawing.FontStyle]$Style = [System.Drawing.FontStyle]::Regular
-    )
-
-    if ($Width -le 0) { return $X }
-    $label = New-Object System.Windows.Forms.Label
-    $label.Text = [string]$Text
-    $label.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 10, $Style)
-    $label.ForeColor = $Color
-    $label.BackColor = [System.Drawing.Color]::White
-    $label.Location = New-Object System.Drawing.Point($X, $Y)
-    $label.Size = New-Object System.Drawing.Size($Width, 20)
-    $label.TextAlign = 'MiddleLeft'
-    $label.AutoEllipsis = $true
-    $Parent.Controls.Add($label)
-    return ($X + $Width)
-}
-
-function Add-NotifyMessageLineLabels {
-    param(
-        [Parameter(Mandatory)]$Parent,
-        [AllowNull()][string]$Line,
-        [int]$Y,
-        [int]$Left,
-        [int]$Width
-    )
-
-    $regularFont = New-Object System.Drawing.Font('Microsoft YaHei UI', 10)
-    $boldFont = New-Object System.Drawing.Font('Microsoft YaHei UI', 10, [System.Drawing.FontStyle]::Bold)
-    $prefixParts = Split-NotifyLinePrefix $Line
-    if (-not $prefixParts) {
-        [void](Add-NotifySegmentLabel -Parent $Parent -Text $Line -X $Left -Y $Y -Width $Width -Color $messageTextColor)
-        return
-    }
-
-    $prefix = [string]$prefixParts[0]
-    $rest = [string]$prefixParts[1]
-    $accountWord = ConvertFrom-Utf8Base64 '6LSm5Y+3'
-    $threadWord = ConvertFrom-Utf8Base64 '6IGK5aSp'
-    $taskWord = ConvertFrom-Utf8Base64 '5Lu75Yqh'
-    $prefixWidth = Measure-NotifyTextWidth -Text $prefix -Font $boldFont -MinWidth 38 -MaxWidth 72
-    $x = Add-NotifySegmentLabel -Parent $Parent -Text $prefix -X $Left -Y $Y -Width $prefixWidth -Color $accentColor -Style ([System.Drawing.FontStyle]::Bold)
-    $remainingWidth = $Width - ($x - $Left)
-
-    if ($remainingWidth -le 0) { return }
-
-    if ($prefix.StartsWith($accountWord, [System.StringComparison]::OrdinalIgnoreCase)) {
-        $parts = @([System.Text.RegularExpressions.Regex]::Split($rest, '\s+\|\s+'))
-        if ($parts.Count -gt 1) {
-            $separator = ' | '
-            $separatorWidth = Measure-NotifyTextWidth -Text $separator -Font $regularFont -MinWidth 14 -MaxWidth 18
-            $accountWidth = [Math]::Min(
-                (Measure-NotifyTextWidth -Text $parts[0] -Font $boldFont -MinWidth 48 -MaxWidth 132),
-                [Math]::Max(48, $remainingWidth - $separatorWidth - 62)
-            )
-            $x = Add-NotifySegmentLabel -Parent $Parent -Text $parts[0] -X $x -Y $Y -Width $accountWidth -Color $messageAccountColor -Style ([System.Drawing.FontStyle]::Bold)
-            $x = Add-NotifySegmentLabel -Parent $Parent -Text $separator -X $x -Y $Y -Width $separatorWidth -Color $messageMutedColor
-            [void](Add-NotifySegmentLabel -Parent $Parent -Text $parts[1] -X $x -Y $Y -Width ($Width - ($x - $Left)) -Color $messageDirectoryColor -Style ([System.Drawing.FontStyle]::Bold))
-        }
-        else {
-            [void](Add-NotifySegmentLabel -Parent $Parent -Text $rest -X $x -Y $Y -Width $remainingWidth -Color $messageAccountColor -Style ([System.Drawing.FontStyle]::Bold))
-        }
-        return
-    }
-
-    if ($prefix.StartsWith($threadWord, [System.StringComparison]::OrdinalIgnoreCase)) {
-        [void](Add-NotifySegmentLabel -Parent $Parent -Text $rest -X $x -Y $Y -Width $remainingWidth -Color $messageThreadColor -Style ([System.Drawing.FontStyle]::Bold))
-        return
-    }
-
-    if ($prefix.StartsWith($taskWord, [System.StringComparison]::OrdinalIgnoreCase)) {
-        [void](Add-NotifySegmentLabel -Parent $Parent -Text $rest -X $x -Y $Y -Width $remainingWidth -Color $messageTextColor)
-        return
-    }
-
-    [void](Add-NotifySegmentLabel -Parent $Parent -Text $rest -X $x -Y $Y -Width $remainingWidth -Color $messageTextColor)
-}
-
 function Add-NotifyMessageLabels {
     param(
         [Parameter(Mandatory)]$Parent,
@@ -1473,12 +1364,22 @@ function Add-NotifyMessageLabels {
     $normalized = ([string]$Text).Replace("`r`n", "`n").Replace("`r", "`n")
     $lines = $normalized -split "`n"
     $maxLines = [Math]::Min(3, $lines.Count)
+    $colors = @($messageAccountColor, $messageThreadColor, $messageTextColor)
     for ($i = 0; $i -lt $maxLines; $i++) {
         $line = [string]$lines[$i]
         if ($i -eq 2 -and $lines.Count -gt 3) {
             $line = $line.TrimEnd() + ' ...'
         }
-        Add-NotifyMessageLineLabels -Parent $Parent -Line $line -Y ($Top + ($i * 21)) -Left $Left -Width $Width
+        $label = New-Object System.Windows.Forms.Label
+        $label.Text = $line
+        $label.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 10)
+        $label.ForeColor = $colors[$i]
+        $label.BackColor = [System.Drawing.Color]::White
+        $label.Location = New-Object System.Drawing.Point($Left, ($Top + ($i * 21)))
+        $label.Size = New-Object System.Drawing.Size($Width, 20)
+        $label.TextAlign = 'MiddleLeft'
+        $label.AutoEllipsis = $true
+        $Parent.Controls.Add($label)
     }
 }
 

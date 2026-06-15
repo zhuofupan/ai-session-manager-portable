@@ -33,7 +33,7 @@ public static class CodexHistorySyncWindow {
 [System.Windows.Forms.Application]::EnableVisualStyles()
 [System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException)
 
-$script:AppVersion = '2026.06.15.07'
+$script:AppVersion = '2026.06.15.08'
 $script:AppAuthor = 'Joff Pan'
 $script:GitHubRepo = 'zhuofupan/codex-history-sync-portable'
 $script:GitHubUrl = "https://github.com/$script:GitHubRepo"
@@ -316,6 +316,7 @@ $script:UiStrings = @{
         PowerShellLaunch     = 'PowerShell启动'
         ApprovalNeverLaunch  = '完全访问'
         CompletionPopup      = '弹窗提醒'
+        TestPopup            = '测试弹窗'
         Help                 = '帮助'
         CheckUpdate          = '检查更新'
         GridSelect           = '选择'
@@ -377,6 +378,7 @@ $script:UiStrings = @{
         PowerShellLaunch     = 'PowerShell'
         ApprovalNeverLaunch  = 'Full Access'
         CompletionPopup      = 'Popup Alert'
+        TestPopup            = 'Test Popup'
         Help                 = 'Help'
         CheckUpdate          = 'Check Update'
         GridSelect           = 'Select'
@@ -1495,6 +1497,7 @@ function Layout-ToolbarGroups {
     Move-Control $script:ApprovalNeverLaunchBox ($script:UsePowerShellLaunchBox.Right + 12) 25
     Move-Control $script:LoadCheckedRecordBox ($script:ApprovalNeverLaunchBox.Right + 12) 25
     Move-Control $script:TurnEndedNotifyBox ($script:LoadCheckedRecordBox.Right + 12) 25
+    Move-Control $testNotifyButton ($script:TurnEndedNotifyBox.Right + 4) 22 26 28
     Resize-GroupToFitControls -Group $launchGroup -MinWidth 0 -MinHeight 58 -RightPadding 18
 
     Move-Control $helpButton 14 22
@@ -1561,6 +1564,9 @@ function Apply-UiLanguage {
     Set-ControlText $script:UsePowerShellLaunchBox 'PowerShellLaunch'
     Set-ControlText $script:ApprovalNeverLaunchBox 'ApprovalNeverLaunch'
     Set-ControlText $script:TurnEndedNotifyBox 'CompletionPopup'
+    if ($script:ToolTip -and $testNotifyButton) {
+        $script:ToolTip.SetToolTip($testNotifyButton, (Get-UiText 'TestPopup'))
+    }
     Set-ControlText $helpButton 'Help'
     Set-ControlText $updateButton 'CheckUpdate'
     Reset-LaunchModelOptions
@@ -4480,6 +4486,38 @@ function Apply-TurnEndedNotifyToCurrentConfig {
     Append-Log "已写入弹窗提醒 CLI notify 配置：$configPath"
 }
 
+function Show-TestTurnEndedNotify {
+    if ([string]::IsNullOrWhiteSpace($script:NotifierPath) -or
+        -not (Test-Path -LiteralPath $script:NotifierPath -PathType Leaf)) {
+        throw "未找到会话结束提醒脚本：$script:NotifierPath"
+    }
+
+    $stamp = Get-Date -Format 'HH:mm:ss'
+    $message = "账号：测试账号 | 测试目录`r`n聊天：test-$stamp`r`n任务：测试弹窗颜色显示"
+    $messageBase64 = [Convert]::ToBase64String($script:Utf8NoBom.GetBytes($message))
+    Start-Process -FilePath powershell.exe -ArgumentList @(
+        '-NoProfile',
+        '-STA',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-WindowStyle',
+        'Hidden',
+        '-File',
+        $script:NotifierPath,
+        '-Title',
+        'Codex 会话已结束',
+        '-CodexHome',
+        $CodexHome,
+        '-Kind',
+        'Complete',
+        '-MessageBase64',
+        $messageBase64,
+        '-Seconds',
+        '8'
+    ) -WindowStyle Hidden | Out-Null
+    Append-Log '已触发测试弹窗。'
+}
+
 function Stop-ExistingTurnCompleteMonitor {
     try {
         $currentPid = [System.Diagnostics.Process]::GetCurrentProcess().Id
@@ -5389,6 +5427,10 @@ $script:Form.Size = New-Object System.Drawing.Size(1320, 860)
 $script:Form.MinimumSize = New-Object System.Drawing.Size(1320, 820)
 $script:Form.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
 $script:Form.BackColor = [System.Drawing.Color]::FromArgb(241, 245, 249)
+$script:ToolTip = New-Object System.Windows.Forms.ToolTip
+$script:ToolTip.InitialDelay = 400
+$script:ToolTip.ReshowDelay = 100
+$script:ToolTip.AutoPopDelay = 5000
 
 $headerPanel = New-Object System.Windows.Forms.Panel
 $headerPanel.Location = New-Object System.Drawing.Point(0, 0)
@@ -5584,6 +5626,13 @@ $script:TurnEndedNotifyBox.Location = New-Object System.Drawing.Point(824, 25)
 $script:TurnEndedNotifyBox.Size = New-Object System.Drawing.Size(82, 22)
 $script:TurnEndedNotifyBox.Checked = $true
 $launchGroup.Controls.Add($script:TurnEndedNotifyBox)
+$testNotifyButton = New-Button '!' 912 22 26 'Soft'
+$testNotifyButton.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
+$testNotifyButton.AccessibleName = '测试弹窗'
+$launchGroup.Controls.Add($testNotifyButton)
+if ($script:ToolTip) {
+    $script:ToolTip.SetToolTip($testNotifyButton, '测试弹窗')
+}
 
 $supportGroup = New-GroupBox '帮助与更新' 904 166 226 58
 $script:Form.Controls.Add($supportGroup)
@@ -5993,6 +6042,14 @@ $script:LoadCheckedRecordBox.Add_CheckedChanged({
 $script:TurnEndedNotifyBox.Add_CheckedChanged({
         if (-not $script:SuppressThreadRefresh) {
             Save-AppState
+        }
+    })
+$testNotifyButton.Add_Click({
+        try {
+            Show-TestTurnEndedNotify
+        }
+        catch {
+            Show-GuiError $_
         }
     })
 
