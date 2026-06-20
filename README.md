@@ -1,20 +1,21 @@
-# Codex History Sync Portable
+# AI Session Manager Portable
 
 [![Platform](https://img.shields.io/badge/platform-Windows-2563eb)](#requirements)
-[![PowerShell](https://img.shields.io/badge/runtime-PowerShell-5391FE)](#requirements)
+[![WPF](https://img.shields.io/badge/gui-WPF-2563eb)](#requirements)
+[![PowerShell](https://img.shields.io/badge/backend-PowerShell-5391FE)](#requirements)
 [![SQLite](https://img.shields.io/badge/storage-SQLite-003B57)](#data-layout)
 [![Portable](https://img.shields.io/badge/install-portable-16a34a)](#quick-start)
 [![Privacy](https://img.shields.io/badge/privacy-local--first-111827)](#privacy-and-safety)
 
 Languages: [English](README.md) | [简体中文](README.zh-CN.md)
 
-Codex History Sync Portable is a small Windows utility for copying Codex Desktop local chat history between different `model_provider` buckets, such as `openai`, `custom`, and other provider names used by local routing tools.
+AI Session Manager Portable is a small Windows utility for viewing, launching, and deriving local AI tool sessions. It currently focuses on Codex Desktop local sessions and is starting to integrate the Codex / Claude Code session index captured by cc-switch.
 
 It is designed for people who switch Codex providers often and want the same local threads to remain visible across accounts without manually moving database rows or editing rollout files.
 
 ## Screenshot
 
-![Codex History Sync GUI overview in English](assets/screenshots/gui-overview.en-US.png)
+![AI Session Manager GUI overview in English](assets/screenshots/gui-overview.en-US.png)
 
 The screenshot uses synthetic demo data and redacted local paths only. The Chinese UI screenshot is in [README.zh-CN.md](README.zh-CN.md).
 
@@ -24,7 +25,7 @@ The screenshot uses synthetic demo data and redacted local paths only. The Chine
 | --- | --- |
 | Project type | Local desktop utility |
 | Target platform | Windows |
-| Interface | WinForms GUI plus PowerShell CLI |
+| Interface | Native C#/.NET WPF GUI plus PowerShell CLI backend |
 | Data source | Local Codex `state_5.sqlite` and `sessions\rollout-*.jsonl` files |
 | Network use | None for history sync |
 | Write behavior | Copies or updates local history entries after confirmation |
@@ -34,9 +35,9 @@ The screenshot uses synthetic demo data and redacted local paths only. The Chine
 ## TL;DR
 
 1. Download or clone this project.
-2. Run `codex-history-sync-gui.vbs` for the no-console GUI.
+2. Run `ai-session-manager-portable.exe` directly.
 3. Pick a source provider and target provider.
-4. Select the threads you want, then click `同步勾选`, or use `同步全部`.
+4. Select the threads you want, then click `派生勾选`, or use `派生全部`.
 5. The tool backs up Codex state before writing.
 
 ## Why This Exists
@@ -49,25 +50,27 @@ This project automates the safe version of that migration:
 - It creates or updates a destination copy.
 - It rewrites the copied thread id inside the rollout file.
 - It updates the target `model_provider`.
-- When cc-switch is available, GUI sync uses the destination cc-switch node to rewrite `model`, `reasoning_effort`, and continuation metadata in the copied rollout.
-- For non-official nodes, GUI sync enables proxy compatibility cleanup by removing official Codex-only reasoning and function/custom tool response items that can make routers such as Any Router or RightCode reject continued chats with `invalid codex request`.
-- It records clone mappings so repeated syncs update existing copies instead of creating duplicates.
+- When cc-switch is available, GUI derive uses the destination cc-switch node to rewrite `model`, `reasoning_effort`, and continuation metadata in the copied rollout.
+- For non-official nodes, GUI derive enables proxy compatibility cleanup by removing official Codex-only reasoning and function/custom tool response items that can make routers such as Any Router or RightCode reject continued chats with `invalid codex request`.
+- It records clone mappings so repeated derives update existing copies instead of creating duplicates.
 
 ## Features
 
-- GUI for browsing and syncing recent Codex threads.
-- CLI for provider listing, one-off clone, one-way sync, two-way mirror, and mapping registration.
-- Directory filter for syncing only threads from a selected workspace path.
+- Native WPF GUI for browsing and deriving recent Codex threads.
+- Session list paging, search, workspace filtering, archive filtering, and provider color accents.
+- CLI for provider listing, one-off clone, one-way derive, two-way mirror derive, and mapping registration.
+- Directory filter for deriving only threads from a selected workspace path.
 - Automatic Codex history discovery from common local locations.
 - Manual directory selection when the history directory is portable or custom.
 - Automatic backups before writes.
-- Optional cc-switch integration for reading Codex provider nodes and launching Codex through a selected node.
+- Optional cc-switch integration for reading Codex provider nodes and derive parameters.
 - Optional completion popup for Codex turn-ended notifications.
-- Hidden-window VBS launchers for GUI and notification helpers.
+- Native WPF executable with the app icon in the taskbar.
 
 ## Requirements
 
 - Windows 10 or later.
+- .NET Framework 4.x runtime.
 - PowerShell 5.1 or later.
 - Codex Desktop local history files.
 - A `state_5.sqlite` file and matching `sessions` directory.
@@ -76,55 +79,44 @@ The package includes `bin\sqlite3.exe` so users do not need to install SQLite se
 
 ## Quick Start
 
-Run the GUI:
+Run the native WPF GUI:
 
 ```bat
-codex-history-sync-gui.vbs
+ai-session-manager-portable.exe
 ```
 
-or, if you want to see a launcher console:
-
-```bat
-codex-history-sync-gui.cmd
-```
-
-The GUI opens with these main controls:
+The WPF GUI opens with these main controls:
 
 | Control | Purpose |
 | --- | --- |
-| `Codex源账号` | Provider bucket to copy from |
-| `Codex目标账号` | Provider bucket to copy to |
-| `目录筛选` | Restrict the list to a specific workspace path |
-| `显示条数` | Maximum rows displayed in the thread table |
-| `同步勾选` | Copy only checked rows |
-| `同步全部` | Copy all listed source rows to the target provider |
-| `双向同步` | Sync both directions between the selected providers |
-| `供应商` | cc-switch Codex provider used by `从终端启动` |
-| `从终端启动` | Open an elevated terminal; the first terminal line shows `[管理员模式]` or `[非管理员]`; resume the current row when `+聊天` is enabled, or start a new chat when disabled |
-| `+聊天` | When enabled, the current row launches with `codex resume <thread-id>`; the left checkbox column is only for checked-row sync |
-| `模型` / `智能` | Temporarily pass `-m` and `model_reasoning_effort` launch overrides to Codex; default uses the selected node or `config.toml` |
-| `PowerShell启动` | Prefer PowerShell when checked; prefer CMD when unchecked; fall back automatically if the preferred terminal is unavailable |
+| `源账号` | Provider bucket to copy from |
+| `目标账号` | Provider bucket to copy to |
+| `项目目录` | Restrict the list to a specific workspace path |
+| `搜索` | Filter by title, id, workspace, or provider |
+| `显示归档` | Include archived sessions |
+| `每页` / `上一页` / `下一页` | Page through sessions instead of rendering everything at once |
+| `派生勾选` | Derive only checked rows |
+| `派生全部` | Derive all filtered source rows to the target provider |
+| `双向派生` | Derive both directions between the selected providers |
+| `打开文件` / `打开目录` / `复制 ID` | Common actions for the selected session |
+| `启动终端` | Open a terminal; resume the current row when `+ 会话` is enabled, or start a new chat when disabled |
+| `+聊天` | When enabled, the current row launches with `codex resume <thread-id>`; the left checkbox column is only for checked-row derive |
+| `Fast` | Pass `service_tier=fast` when checked |
 | `完全访问` | Launch Codex with `--dangerously-bypass-approvals-and-sandbox`; checked by default for new configs |
-| language text next to `GitHub` | Switch the GUI between Chinese and English |
-| `软件配置文件` | Open root `codex-history-sync-config.json`; the GUI creates it if missing and reloads it after saves |
-| `帮助` | Show path/account/start/update guidance and copy Everything search terms |
-| `检查更新` | Check GitHub main for a newer version; clean Git checkouts auto-sync with `git pull --ff-only origin main`, otherwise the GUI applies the ZIP hot update |
-| `加载codex账号` | Manually load the `.codex` folder that contains `state_5.sqlite` |
-| `打开聊天内容` | Open the selected chat's rollout folder; if no chat is selected, open `.codex\sessions` |
-| `codex目录` | Open the current Codex history root directory |
-| `加载cc-switch.db文件` | Manually load `cc-switch.db` or a compatible `.db` file, so the GUI can read Codex launch providers such as Any Router and RightCode |
-| 表格右键菜单 | Launch a terminal, launch with the current chat, sync this/checked/all rows to the target account, open directories, or copy row values |
+| `打开配置` | Open root `ai-session-manager-config.json` |
+| `Codex 目录` | Open the current Codex history root directory |
+| `帮助` / `会话历史` / `检查更新` | Open help, full history, or the Git update check |
 
 ## CLI Usage
 
 Use the CLI launcher when you want scriptable operations:
 
 ```bat
-codex-history-sync.cmd providers
-codex-history-sync.cmd list -From openai -Limit 20
-codex-history-sync.cmd clone -Id <thread-id> -To custom
-codex-history-sync.cmd sync -From openai -To custom
-codex-history-sync.cmd mirror -Providers openai,custom
+ai-session-manager.cmd providers
+ai-session-manager.cmd list -From openai -Limit 20
+ai-session-manager.cmd clone -Id <thread-id> -To custom
+ai-session-manager.cmd sync -From openai -To custom
+ai-session-manager.cmd mirror -Providers openai,custom
 ```
 
 Useful switches:
@@ -161,41 +153,36 @@ A valid Codex history directory usually contains:
           rollout-*.jsonl
 ```
 
-If you select `sessions` or a nested sessions folder by mistake, the GUI walks upward until it finds the parent directory containing `state_5.sqlite`.
+The WPF GUI discovers Codex history from the config file, `CODEX_HOME`, or `%USERPROFILE%\.codex`. If discovery fails, set `codexHome` in `ai-session-manager-config.json`.
 
 ## Config File
 
-If a new user sees `请先选择账号` or `找不到 codex.exe`, click `软件配置文件`, fill the paths described in `_help`, then save the file.
+If a new user sees missing history or `codex.exe` path errors, click `打开配置`, fill the paths described by the template, then save the file.
 
-1. The GUI creates root `codex-history-sync-config.json` automatically.
-2. If Codex history, cc-switch nodes, or Codex CLI are detected, the config file is filled with those paths and account lists.
+1. The GUI creates root `ai-session-manager-config.json` automatically.
+2. If Codex history or Codex CLI is detected, the config file is filled with those paths and defaults.
 3. After you edit and save the config file, the GUI reloads it automatically.
-4. When you change UI preferences such as checkboxes, selected providers, display limit, directory filter, or language, the GUI saves those habits back to the config file. Save failures are logged in the GUI instead of crashing the app.
-5. Chinese and English window widths are remembered separately, so switching languages restores the width last used for that language.
+4. The WPF GUI reads and saves defaults for provider choices, paging, directory filtering, and launch options.
 
-`codex-history-sync-config.template.json` is a generic shareable template. The real local configuration lives in `codex-history-sync-config.json`. Keep API keys and tokens out of this file; it is intended only for local paths and default UI choices.
+`ai-session-manager-config.template.json` is a generic shareable template. The real local configuration lives in `ai-session-manager-config.json`. Keep API keys and tokens out of this file; it is intended only for local paths and default UI choices.
 
-When no root `codex-history-sync-config.json` exists, the GUI restores the last saved runtime state from `%APPDATA%\codex-history-sync-portable\last-state.json`. That state stores local paths, selected providers, the directory filter, and checkbox choices, but not API keys or tokens.
+`启动终端` writes the current workspace to Codex `config.toml` as a trusted project, which reduces repeated `Do you trust the contents of this directory?` prompts for the same directory.
 
-`从终端启动` writes the current workspace to Codex `config.toml` as a trusted project, which reduces repeated `Do you trust the contents of this directory?` prompts for the same directory.
+When `Fast` is checked in the WPF GUI, the launch command passes `service_tier=fast`.
 
-After the GUI is closed, the completion popup monitor can continue running in the background. Opening the GUI again reuses the same configuration and restarts the monitor. The GUI itself is single-instance and will not open two windows at once.
-
-The fast-mode Apps plugin compatibility guard is automatic and no longer shown as a checkbox.
-
-## Sync Semantics
+## Derive Semantics
 
 `clone` and `sync` are copy operations, not moves. The original thread remains under the source provider. The target thread receives its own generated id and points to its own copied rollout file.
 
-When the same source thread is synced again, the tool checks `codex-history-sync-map.json` in the Codex home directory. If a target copy is already mapped and still exists, the tool updates that existing copy.
+When the same source thread is derived again, the tool checks `ai-session-manager-map.json` in the Codex home directory. If a target copy is already mapped and still exists, the tool updates that existing copy. The legacy `codex-history-sync-map.json` is migrated automatically.
 
 ## cc-switch Integration
 
 Basic history copying does not strictly require cc-switch; without cc-switch, the tool can still copy between `model_provider` buckets.
 
-When `cc-switch.db` is available, GUI sync reads the destination Codex node configuration and uses it to rewrite continuation metadata in the target copy. For example, syncing to `custom` reads the `Any Router` node model and reasoning settings, then applies proxy compatibility cleanup to the copied rollout.
+When `cc-switch.db` is available, the WPF GUI reads destination Codex node configuration and passes `TargetModel`, `TargetReasoningEffort`, and proxy cleanup options to the derive backend. For example, deriving to `custom` can use the `Any Router` node model and reasoning settings.
 
-If `cc-switch.db` is available, the GUI can read Codex providers from cc-switch and display them in the `供应商` dropdown. That dropdown is for launching Codex through a selected cc-switch provider; the source and target history buckets still come from Codex `model_provider` values.
+If `cc-switch.db` is available, the GUI reads Codex providers from cc-switch and displays them in the `供应商` dropdown. The WPF GUI currently uses that node as account reference and derive-parameter context; the source and target history buckets still come from Codex `model_provider` values.
 
 The tool searches for `cc-switch.db` in these places:
 
@@ -211,8 +198,8 @@ If automatic discovery fails, use `加载cc-switch.db文件` and select `cc-swit
 
 The GUI can enable a local completion popup for Codex responses. When `弹窗提醒` is enabled, the tool:
 
-- writes the local Codex `notify` setting to use `tools\codex-turn-ended-notify.vbs`;
-- starts `tools\codex-turn-complete-monitor.vbs`;
+- writes the local Codex `notify` setting to use `tools\ai-session-turn-ended-notify.vbs`;
+- starts `tools\ai-session-turn-complete-monitor.vbs`;
 - watches recent `rollout-*.jsonl` files for `task_complete` events;
 - shows a topmost Windows popup and plays a short notification sound;
 - includes a compact account, chat, and last user-task summary when local rollout context is available.
@@ -234,7 +221,7 @@ This repository is intended to contain only scripts, launchers, documentation, a
 - backups generated by this tool.
 - personal logs or screenshots.
 
-Before every write operation, the sync scripts create backups under:
+Before every write operation, the derive scripts create backups under:
 
 ```text
 %USERPROFILE%\.codex\backups\history-sync-*
@@ -247,15 +234,14 @@ The included `.gitignore` blocks common local databases, Codex state files, envi
 
 | Path | Purpose |
 | --- | --- |
-| `codex-history-sync-gui.vbs` | No-console GUI launcher |
-| `codex-history-sync-gui.cmd` | Console-visible GUI launcher |
-| `codex-history-sync.cmd` | CLI launcher |
-| `tools\codex-history-sync-gui.ps1` | Main WinForms GUI |
-| `tools\codex-history-sync.ps1` | Core CLI sync engine |
-| `tools\codex-turn-complete-monitor.ps1` | Watches local rollout files for completion events |
-| `tools\codex-turn-complete-monitor.vbs` | No-console monitor launcher |
-| `tools\codex-turn-ended-notify.ps1` | Local popup notifier |
-| `tools\codex-turn-ended-notify.vbs` | No-console notifier launcher |
+| `ai-session-manager-portable.exe` | Native C#/.NET WPF GUI |
+| `src\AiSessionManagerWpf\Program.cs` | WPF GUI source |
+| `ai-session-manager.cmd` | CLI launcher |
+| `tools\ai-session-manager.ps1` | Core CLI derive engine |
+| `tools\ai-session-turn-complete-monitor.ps1` | Watches local rollout files for completion events |
+| `tools\ai-session-turn-complete-monitor.vbs` | No-console monitor launcher |
+| `tools\ai-session-turn-ended-notify.ps1` | Local popup notifier |
+| `tools\ai-session-turn-ended-notify.vbs` | No-console notifier launcher |
 | `bin\sqlite3.exe` | Portable SQLite command-line binary |
 
 ## Intended Use
@@ -271,17 +257,17 @@ This project is useful when:
 
 - Windows-only.
 - It depends on Codex Desktop's current local data layout.
-- It does not decrypt, upload, or cloud-sync Codex history.
+- It does not decrypt, upload, or cloud-copy Codex history.
 - It does not merge divergent conversations semantically; it copies and updates local records.
 - cc-switch support is optional and depends on the local cc-switch database schema.
 
 ## Troubleshooting
 
-If no Codex records appear, click `加载codex账号` and choose the `.codex` folder containing `state_5.sqlite`.
+If no Codex records appear, click `打开配置` and make sure `codexHome` points to the `.codex` folder containing `state_5.sqlite`.
 
 If the provider list looks incomplete, click `刷新` after opening Codex once with the provider you expect.
 
-If a sync fails because a rollout file is being written, close or pause active Codex work and retry. The copy routine already retries briefly when files are busy.
+If a derive fails because a rollout file is being written, close or pause active Codex work and retry. The copy routine already retries briefly when files are busy.
 
 If Codex startup shows `MCP client for node_repl failed to start`, the usual cause is a stale Codex Desktop runtime path after an app update. When the GUI switches nodes or enables completion popups, it automatically repairs the `node_repl.exe`, `node.exe`, `node_modules`, and `codex.exe` paths in `config.toml`.
 
@@ -289,7 +275,13 @@ If cc-switch providers do not appear, click `加载cc-switch.db文件` and choos
 
 ## Development Notes
 
-The code is intentionally plain PowerShell and WinForms so it can run on a normal Windows machine without a build step. The GUI delegates actual history writes to the CLI script, which keeps the sync behavior shared between GUI and command-line use.
+The main GUI is C#/.NET WPF and is compiled to `ai-session-manager-portable.exe` with `tools\build-exe.ps1`. Actual history writes still go through the shared PowerShell CLI engine, so the WPF GUI and command line keep the same derive behavior.
+
+Rebuild:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\build-exe.ps1
+```
 
 Recommended pre-release checks:
 

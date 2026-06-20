@@ -13,11 +13,11 @@ thread stays visible in the original account, and the copied thread gets a new
 thread id under the destination provider.
 
 .EXAMPLES
-.\codex-history-sync.ps1 providers
-.\codex-history-sync.ps1 list -From openai -Limit 20
-.\codex-history-sync.ps1 clone -Id 019eb473-dbac-7681-82e1-7e6f964c4946 -To custom
-.\codex-history-sync.ps1 sync -From openai -To custom
-.\codex-history-sync.ps1 mirror -Providers openai,custom
+.\ai-session-manager.ps1 providers
+.\ai-session-manager.ps1 list -From openai -Limit 20
+.\ai-session-manager.ps1 clone -Id 019eb473-dbac-7681-82e1-7e6f964c4946 -To custom
+.\ai-session-manager.ps1 sync -From openai -To custom
+.\ai-session-manager.ps1 mirror -Providers openai,custom
 #>
 
 [CmdletBinding()]
@@ -92,8 +92,8 @@ function Resolve-ToolPath {
     foreach ($path in @(
             (Join-Path $script:RootDir "bin\$exeName"),
             (Join-Path $script:ToolDir "bin\$exeName"),
-            (Join-Path $script:RootDir "dist\codex-history-sync-portable\bin\$exeName"),
-            (Join-Path (Split-Path -Parent $script:RootDir) "codex-history-sync-portable\bin\$exeName")
+            (Join-Path $script:RootDir "dist\ai-session-manager-portable\bin\$exeName"),
+            (Join-Path (Split-Path -Parent $script:RootDir) "ai-session-manager-portable\bin\$exeName")
         )) {
         if (Test-Path -LiteralPath $path) {
             return (Resolve-Path -LiteralPath $path).Path
@@ -110,7 +110,8 @@ function Resolve-ToolPath {
 $CodexHome = Resolve-CodexHome $CodexHome
 $script:Sqlite = Resolve-ToolPath 'sqlite3'
 $script:StateDb = Join-Path $CodexHome 'state_5.sqlite'
-$script:MapPath = Join-Path $CodexHome 'codex-history-sync-map.json'
+$script:MapPath = Join-Path $CodexHome 'ai-session-manager-map.json'
+$script:LegacyMapPath = Join-Path $CodexHome 'codex-history-sync-map.json'
 $script:GlobalStatePath = Join-Path $CodexHome '.codex-global-state.json'
 
 if (-not (Test-Path -LiteralPath $script:StateDb)) {
@@ -201,6 +202,11 @@ function New-CodexThreadId {
 }
 
 function Read-SyncMap {
+    if (-not (Test-Path -LiteralPath $script:MapPath)) {
+        if (Test-Path -LiteralPath $script:LegacyMapPath) {
+            Copy-Item -LiteralPath $script:LegacyMapPath -Destination $script:MapPath -Force
+        }
+    }
     if (-not (Test-Path -LiteralPath $script:MapPath)) {
         return [pscustomobject]@{
             version = 1
@@ -911,7 +917,7 @@ ORDER BY count DESC, model_provider, source;
 function Show-List {
     $conditions = @()
     if ($From) { $conditions += "model_provider = $(Quote-Sql $From)" }
-    if (-not $IncludeArchived) { $conditions += "archived = 0" }
+    if (-not $IncludeArchived) { $conditions += "COALESCE(archived, 0) = 0" }
     $where = ''
     if ($conditions.Count -gt 0) {
         $where = 'WHERE ' + ($conditions -join ' AND ')
@@ -952,7 +958,7 @@ function Invoke-Sync {
     )
 
     $conditions = @("model_provider = $(Quote-Sql $SourceProvider)")
-    if (-not $IncludeArchived) { $conditions += "archived = 0" }
+    if (-not $IncludeArchived) { $conditions += "COALESCE(archived, 0) = 0" }
     $where = 'WHERE ' + ($conditions -join ' AND ')
 
     $rows = Invoke-Sql -Json -Sql @"

@@ -19,10 +19,10 @@ function Write-DiagnosticLog {
 
     try {
         $dir = if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) {
-            Join-Path $env:APPDATA 'codex-history-sync-portable'
+            Join-Path $env:APPDATA 'ai-session-manager-portable'
         }
         else {
-            Join-Path ([System.IO.Path]::GetTempPath()) 'codex-history-sync-portable'
+            Join-Path ([System.IO.Path]::GetTempPath()) 'ai-session-manager-portable'
         }
         if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
             New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -79,10 +79,10 @@ if ([string]::IsNullOrWhiteSpace($script:CodexHome)) {
 
 $script:SessionsDir = Join-Path $script:CodexHome 'sessions'
 if ([string]::IsNullOrWhiteSpace($NotifierLauncherPath)) {
-    $NotifierLauncherPath = Join-Path $script:ToolDir 'codex-turn-ended-notify.vbs'
+    $NotifierLauncherPath = Join-Path $script:ToolDir 'ai-session-turn-ended-notify.vbs'
 }
 if ([string]::IsNullOrWhiteSpace($NotifierPath)) {
-    $NotifierPath = Join-Path $script:ToolDir 'codex-turn-ended-notify.ps1'
+    $NotifierPath = Join-Path $script:ToolDir 'ai-session-turn-ended-notify.ps1'
 }
 
 $script:MonitorStartedAt = [DateTimeOffset]::UtcNow

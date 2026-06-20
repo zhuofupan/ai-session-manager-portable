@@ -6,8 +6,8 @@ Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 
 scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
-ps1Path = fso.BuildPath(scriptDir, "codex-turn-ended-notify.ps1")
-argsPath = fso.BuildPath(shell.ExpandEnvironmentStrings("%TEMP%"), "codex-turn-ended-notify-" & fso.GetTempName() & ".json")
+ps1Path = fso.BuildPath(scriptDir, "ai-session-turn-ended-notify.ps1")
+argsPath = fso.BuildPath(shell.ExpandEnvironmentStrings("%TEMP%"), "ai-session-turn-ended-notify-" & fso.GetTempName() & ".json")
 
 Set argsFile = fso.CreateTextFile(argsPath, True, True)
 argsFile.Write "["

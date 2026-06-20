@@ -1,20 +1,21 @@
-# Codex History Sync Portable
+# AI 会话管理器 Portable
 
 [![平台](https://img.shields.io/badge/platform-Windows-2563eb)](#运行要求)
-[![PowerShell](https://img.shields.io/badge/runtime-PowerShell-5391FE)](#运行要求)
+[![WPF](https://img.shields.io/badge/gui-WPF-2563eb)](#运行要求)
+[![PowerShell](https://img.shields.io/badge/backend-PowerShell-5391FE)](#运行要求)
 [![SQLite](https://img.shields.io/badge/storage-SQLite-003B57)](#数据位置)
 [![便携版](https://img.shields.io/badge/install-portable-16a34a)](#快速开始)
 [![本地优先](https://img.shields.io/badge/privacy-local--first-111827)](#隐私与安全)
 
 语言: [English](README.md) | [简体中文](README.zh-CN.md)
 
-Codex History Sync Portable 是一个 Windows 便携工具，用来把 Codex Desktop 本地聊天记录复制同步到不同的 `model_provider` 账号桶里，例如 `openai`、`custom`，或者本地路由工具写入的其他 provider 名称。
+AI 会话管理器 Portable 是一个 Windows 便携工具，用来统一查看、启动和派生本地 AI 工具会话。当前重点支持 Codex Desktop 本地会话，并开始接入 cc-switch 捕捉到的 Claude Code / Codex 路由会话索引。
 
 它适合经常在官方账号、自定义 API、cc-switch 节点或其他 Codex provider 之间切换的人。你不用手动改 SQLite，也不用自己复制 `rollout-*.jsonl` 文件，就能让同一批本地对话在不同 provider 桶里可见。
 
 ## 软件截图
 
-![Codex History Sync GUI 中文界面预览](assets/screenshots/gui-overview.zh-CN.png)
+![AI 会话管理器中文界面预览](assets/screenshots/gui-overview.zh-CN.png)
 
 截图只使用示例数据和打码后的本地路径，不包含真实本地聊天记录。英文界面截图见 [README.md](README.md)。
 
@@ -24,9 +25,9 @@ Codex History Sync Portable 是一个 Windows 便携工具，用来把 Codex Des
 | --- | --- |
 | 项目类型 | 本地桌面工具 |
 | 目标平台 | Windows |
-| 交互方式 | WinForms 图形界面 + PowerShell 命令行 |
+| 交互方式 | C#/.NET WPF 原生图形界面 + PowerShell 命令行后端 |
 | 数据来源 | 本地 Codex `state_5.sqlite` 和 `sessions\rollout-*.jsonl` 文件 |
-| 网络请求 | 普通历史同步不联网 |
+| 网络请求 | 普通历史派生不联网 |
 | 写入行为 | 用户确认后复制或更新本地历史记录 |
 | 备份行为 | 修改 Codex 文件前自动创建时间戳备份 |
 | 便携依赖 | 自带 `sqlite3.exe` |
@@ -34,16 +35,10 @@ Codex History Sync Portable 是一个 Windows 便携工具，用来把 Codex Des
 ## 快速开始
 
 1. 下载或 clone 这个项目。
-2. 双击运行 `codex-history-sync-gui.vbs`，这是无控制台窗口版本。
-3. 选择 `Codex源账号` 和 `Codex目标账号`。
-4. 勾选要同步的记录，然后点 `同步勾选`；或者直接点 `同步全部`。
+2. 双击运行 `ai-session-manager-portable.exe`。
+3. 选择 `源账号` 和 `目标账号`。
+4. 勾选要派生的记录，然后点 `派生勾选`；或者直接点 `派生全部`。
 5. 工具会在真正写入前自动备份 Codex 本地状态。
-
-如果想看到启动控制台，可以运行：
-
-```bat
-codex-history-sync-gui.cmd
-```
 
 ## 为什么需要它
 
@@ -51,32 +46,34 @@ Codex Desktop 会把本地线程元数据放在 SQLite 数据库里，把对话 
 
 这意味着，如果一个账号把历史写在 `openai` 桶里，另一个账号把历史写在 `custom` 桶里，同一个本地对话可能只在其中一个账号视图里出现。
 
-这个工具做的是更安全的复制同步：
+这个工具做的是更安全的复制派生：
 
 - 保留源线程，不移动、不删除原始记录。
 - 为目标 provider 创建或更新一份副本。
 - 自动生成新的线程 id。
 - 自动重写复制出来的 rollout 文件里的线程 id。
 - 自动把目标记录的 `model_provider` 改成目标账号桶。
-- 如果检测到 cc-switch 目标节点，GUI 同步会按目标节点配置重写 `model`、`reasoning_effort` 和 rollout 里的续聊上下文。
-- 同步到非官方节点时会启用第三方兼容清理，移除官方 Codex 专用的 reasoning、function/custom tool response item，降低 Any Router、RightCode 等路由续聊时出现 `invalid codex request` 的概率。
-- 记录映射关系，重复同步同一条记录时更新已有副本，而不是无限创建重复记录。
+- 如果检测到 cc-switch 目标节点，GUI 派生会按目标节点配置重写 `model`、`reasoning_effort` 和 rollout 里的续聊上下文。
+- 派生到非官方节点时会启用第三方兼容清理，移除官方 Codex 专用的 reasoning、function/custom tool response item，降低 Any Router、RightCode 等路由续聊时出现 `invalid codex request` 的概率。
+- 记录映射关系，重复派生同一条记录时更新已有副本，而不是无限创建重复记录。
 
 ## 主要功能
 
-- 图形界面浏览和同步最近的 Codex 对话。
+- WPF 原生图形界面浏览和派生最近的 Codex 对话。
+- 会话列表支持分页、搜索、目录筛选、归档筛选和 provider 色彩区分。
 - 命令行支持 provider 列表、单条 clone、单向 sync、双向 mirror、映射注册。
-- 支持按工作目录筛选，只同步某个项目下的历史。
+- 支持按工作目录筛选，只派生某个项目下的历史。
 - 自动寻找常见位置的 Codex 历史目录。
 - 支持手动选择便携或自定义 `.codex` 目录。
 - 写入前自动备份。
-- 可选读取 cc-switch 的 Codex 节点并通过选中节点启动 Codex。
+- 可选读取 cc-switch 的 Codex 节点，用于账号参考和派生参数。
 - 可选 Codex 完成回复后弹窗提醒。
-- `.vbs` 启动器可以隐藏 PowerShell 控制台窗口。
+- 原生 WPF exe 直接启动，任务栏显示软件自己的图标。
 
 ## 运行要求
 
 - Windows 10 或更高版本。
+- .NET Framework 4.x 运行时。
 - PowerShell 5.1 或更高版本。
 - 本机有 Codex Desktop 的本地历史文件。
 - Codex 历史目录中有 `state_5.sqlite` 和对应的 `sessions` 目录。
@@ -85,45 +82,40 @@ Codex Desktop 会把本地线程元数据放在 SQLite 数据库里，把对话 
 
 ## 图形界面说明
 
-GUI 里的主要控件如下：
+WPF GUI 里的主要控件如下：
 
 | 控件 | 作用 |
 | --- | --- |
-| `Codex源账号` | 从哪个 provider 桶复制历史 |
-| `Codex目标账号` | 把历史复制到哪个 provider 桶 |
-| `目录筛选` | 只显示或同步某个工作目录下的对话 |
-| `显示条数` | 每次最多显示多少条记录 |
-| `同步勾选` | 只同步已勾选的记录 |
-| `同步全部` | 同步当前源账号下列出的记录 |
-| `双向同步` | 在两个 provider 桶之间互相同步 |
-| `供应商` | `从终端启动` 时使用哪个 cc-switch Codex 供应商 |
-| `从终端启动` | 以管理员身份打开终端；终端第一行会显示 `[管理员模式]` 或 `[非管理员]`；开启 `+聊天` 时恢复当前选中聊天，关闭时在当前目录新建对话 |
-| `+聊天` | 开启后，当前选中聊天会执行 `codex resume <thread-id>`；列表最左侧勾选列只用于同步勾选记录 |
-| `模型` / `智能` | 启动 Codex 时临时追加 `-m` 和 `model_reasoning_effort` 覆盖项；选择默认时使用当前节点或 `config.toml` 配置 |
-| `PowerShell启动` | 勾选时优先用 PowerShell 启动；取消勾选时优先用 CMD 启动；找不到首选终端时会自动退回另一种 |
-| `完全访问` | 从终端启动 Codex 时追加 `--dangerously-bypass-approvals-and-sandbox`；新配置默认勾选 |
-| 标题栏 `GitHub` 右侧语言文字 | 在中文和英文界面之间切换 |
-| `软件配置文件` | 打开根目录 `codex-history-sync-config.json`；首次会自动生成，保存后 GUI 自动刷新 |
-| `帮助` | 显示加载codex账号、cc-switch.db、启动、更新等说明，并复制 Everything 搜索关键词 |
-| `检查更新` | 从 GitHub main 分支检查版本；如果当前目录是干净的 Git checkout，会自动执行 `git pull --ff-only origin main` 同步 GitHub，否则继续使用 ZIP 热更新 |
-| `加载codex账号` | 手动选择包含 `state_5.sqlite` 的 `.codex` 文件夹 |
-| `打开聊天内容` | 打开当前选中聊天的 rollout 文件夹；未选中时打开 `.codex\sessions` |
-| `codex目录` | 打开当前 Codex 历史根目录 |
-| `加载cc-switch.db文件` | 手动选择 `cc-switch.db` 或同结构 `.db` 文件，让 GUI 读取 Any Router、RightCode 等启动供应商 |
-| 表格右键菜单 | 在表格中快速启动终端、启动终端并加载当前聊天、同步此条至/同步勾选/同步全部、打开目录或复制信息 |
+| `源账号` | 从哪个 provider 桶复制历史 |
+| `目标账号` | 把历史复制到哪个 provider 桶 |
+| `项目目录` | 只显示或派生某个工作目录下的对话 |
+| `搜索` | 按标题、ID、目录或账号过滤会话 |
+| `显示归档` | 是否包含 archived 会话 |
+| `每页` / `上一页` / `下一页` | 控制分页显示，避免一次性渲染过多记录 |
+| `派生勾选` | 只派生已勾选的记录 |
+| `派生全部` | 派生当前源账号筛选出的记录 |
+| `双向派生` | 在两个 provider 桶之间互相派生 |
+| `打开文件` / `打开目录` / `复制 ID` | 对当前选中会话执行常用操作 |
+| `启动终端` | 打开终端；开启 `+ 会话` 时恢复当前选中聊天，关闭时在当前目录新建对话 |
+| `+聊天` | 开启后，当前选中聊天会执行 `codex resume <thread-id>`；列表最左侧勾选列只用于派生勾选记录 |
+| `Fast` | 勾选时启动命令追加 `service_tier=fast` |
+| `完全访问` | 启动终端时追加 `--dangerously-bypass-approvals-and-sandbox`；新配置默认勾选 |
+| `打开配置` | 打开根目录 `ai-session-manager-config.json` |
+| `Codex 目录` | 打开当前 Codex 历史根目录 |
+| `帮助` / `会话历史` / `检查更新` | 打开帮助、完整历史窗口或执行 Git 更新检查 |
 
-如果你误选了 `sessions` 或它下面的子目录，工具会自动向上查找包含 `state_5.sqlite` 的父目录。
+如果需要手动指定 Codex 历史目录，请在 `ai-session-manager-config.json` 中设置 `codexHome`。
 
 ## 命令行用法
 
 命令行入口是：
 
 ```bat
-codex-history-sync.cmd providers
-codex-history-sync.cmd list -From openai -Limit 20
-codex-history-sync.cmd clone -Id <thread-id> -To custom
-codex-history-sync.cmd sync -From openai -To custom
-codex-history-sync.cmd mirror -Providers openai,custom
+ai-session-manager.cmd providers
+ai-session-manager.cmd list -From openai -Limit 20
+ai-session-manager.cmd clone -Id <thread-id> -To custom
+ai-session-manager.cmd sync -From openai -To custom
+ai-session-manager.cmd mirror -Providers openai,custom
 ```
 
 常用参数：
@@ -160,41 +152,36 @@ codex-history-sync.cmd mirror -Providers openai,custom
           rollout-*.jsonl
 ```
 
-找到后，GUI 日志区会显示已加载的 Codex 账号目录。如果没找到，GUI 会保持打开，等待你点击 `加载codex账号`。
+WPF GUI 默认从配置、`CODEX_HOME` 或 `%USERPROFILE%\.codex` 自动寻找历史目录。如果没有找到，请在 `ai-session-manager-config.json` 里设置 `codexHome`。
 
 ## 配置文件
 
-新用户如果遇到 `请先选择账号` 或 `找不到 codex.exe`，点击 `软件配置文件`，按 `_help` 里的中文说明填写路径后保存即可。
+新用户如果遇到找不到历史目录或 `codex.exe` 的情况，点击 `打开配置`，按模板说明填写路径后保存即可。
 
-1. GUI 会在根目录自动生成 `codex-history-sync-config.json`。
-2. 如果已经自动检测到 Codex 历史记录、cc-switch 节点或 Codex CLI，配置文件会自动写入这些路径和账号列表。
+1. GUI 会在根目录自动生成 `ai-session-manager-config.json`。
+2. 如果已经自动检测到 Codex 历史记录或 Codex CLI，配置文件会自动写入这些路径和默认选项。
 3. 修改并保存配置文件后，GUI 会自动重新读取并刷新界面。
-4. 你在界面里改过的复选框、账号选择、显示条数、目录筛选和语言等偏好，会自动写回配置文件；如果保存失败，只会写入 GUI 日志，不会让软件闪退。
-5. 中文和英文界面的窗口宽度会分别记住，切换语言时恢复该语言上次使用的宽度。
+4. WPF GUI 会读取并保存账号选择、分页、目录筛选、启动选项等默认值。
 
-`codex-history-sync-config.template.json` 只是通用模板，适合发给别人参考；真实本机配置只写在 `codex-history-sync-config.json`。这个文件只适合保存本机路径和默认选项，不要写 API key 或 token。
+`ai-session-manager-config.template.json` 只是通用模板，适合发给别人参考；真实本机配置只写在 `ai-session-manager-config.json`。这个文件只适合保存本机路径和默认选项，不要写 API key 或 token。
 
-如果根目录没有 `codex-history-sync-config.json`，GUI 会自动读取上一次运行保存的状态。这个状态保存在 `%APPDATA%\codex-history-sync-portable\last-state.json`，包含记录目录、账号目录、下拉菜单选择、目录筛选和勾选项，不包含 API key 或 token。
+`启动终端` 会在 Codex `config.toml` 里把当前工作目录写为 trusted，减少每次进入同一个目录都出现 `Do you trust the contents of this directory?` 确认提示。
 
-`从终端启动` 会在 Codex `config.toml` 里把当前工作目录写为 trusted，减少每次进入同一个目录都出现 `Do you trust the contents of this directory?` 确认提示。
+WPF GUI 勾选 `Fast` 时，启动命令会追加 `service_tier=fast`。
 
-关闭 GUI 后，弹窗提醒监控会继续在后台运行；再次打开 GUI 时会复用同一套配置并重启监控。GUI 本身只允许同时打开一个窗口。
-
-fast 模式下的 Apps 插件兼容保护会自动启用，界面不再显示额外复选框。
-
-## 同步规则
+## 派生规则
 
 `clone` 和 `sync` 都是复制，不是移动。源线程仍然保留在原 provider 桶里，目标线程会有自己的新 id 和自己的 rollout 文件。
 
-工具会在 Codex 历史目录里维护 `codex-history-sync-map.json`。如果同一条源线程已经同步过，下一次同步会更新已有目标副本，而不是重复创建一条新记录。
+工具会在 Codex 历史目录里维护 `ai-session-manager-map.json`。如果同一条源线程已经派生过，下一次派生会更新已有目标副本，而不是重复创建一条新记录。旧版 `codex-history-sync-map.json` 会自动迁移。
 
 ## cc-switch 支持
 
 普通历史复制不强制依赖 cc-switch；没有 cc-switch 时仍然可以复制 `model_provider` 桶。
 
-如果找到了 `cc-switch.db`，GUI 在同步到目标账号桶时会读取目标 cc-switch 节点的 Codex 配置，并用于改写目标副本的续聊元数据。例如同步到 `custom` 时，工具会读取 `Any Router` 节点里的 `model`、`model_reasoning_effort` 等配置，并对目标 rollout 做第三方兼容清理。
+如果找到了 `cc-switch.db`，WPF GUI 会读取目标 cc-switch 节点的 Codex 配置，并用于派生命令的 `TargetModel`、`TargetReasoningEffort` 和第三方 proxy 清理。例如派生到 `custom` 时，会优先使用 `Any Router` 节点里的 `model`、`model_reasoning_effort` 等配置。
 
-只有使用 GUI 里的 `供应商` 下拉框切换供应商并启动 Codex 时，才需要找到 `cc-switch.db`。这个下拉框读取的是 cc-switch 里的 Codex 节点，例如 `OpenAI Official`、`Any Router` 或你自己配置的节点。
+`供应商` 下拉框读取的是 cc-switch 里的 Codex 节点，例如 `OpenAI Official`、`Any Router` 或你自己配置的节点；WPF 当前用它做账号参考和派生参数选择。
 
 工具会自动尝试这些位置：
 
@@ -206,14 +193,14 @@ fast 模式下的 Apps 插件兼容保护会自动启用，界面不再显示额
 
 如果新增节点后没有显示，先点 `刷新`。仍然没有时，点 `加载cc-switch.db文件`，选择 `cc-switch.db` 或同结构 `.db` 文件。
 
-注意：`Codex源账号` 和 `Codex目标账号` 表示 Codex 历史记录里的 `model_provider` 桶；`供应商` 表示启动 Codex 时使用的 cc-switch 节点。两者不是同一个概念。
+注意：`源账号` 和 `目标账号` 表示 Codex 历史记录里的 `model_provider` 桶；`供应商` 表示 cc-switch 节点参考。两者不是同一个概念。
 
 ## 弹窗提醒
 
 GUI 里的 `弹窗提醒` 默认用于本地提醒。启用后，工具会：
 
-- 把 Codex 的 `notify` 设置写成 `tools\codex-turn-ended-notify.vbs`；
-- 启动 `tools\codex-turn-complete-monitor.vbs`；
+- 把 Codex 的 `notify` 设置写成 `tools\ai-session-turn-ended-notify.vbs`；
+- 启动 `tools\ai-session-turn-complete-monitor.vbs`；
 - 监控最近的 `rollout-*.jsonl` 文件；
 - 发现 `task_complete` 事件后弹出置顶提示并播放提示音；
 - 弹窗会尽量显示账号、完成的聊天和最近一条用户任务摘要。
@@ -248,15 +235,14 @@ GUI 里的 `弹窗提醒` 默认用于本地提醒。启用后，工具会：
 
 | 路径 | 说明 |
 | --- | --- |
-| `codex-history-sync-gui.vbs` | 无控制台窗口 GUI 启动器 |
-| `codex-history-sync-gui.cmd` | 显示控制台的 GUI 启动器 |
-| `codex-history-sync.cmd` | 命令行入口 |
-| `tools\codex-history-sync-gui.ps1` | WinForms GUI 主程序 |
-| `tools\codex-history-sync.ps1` | 核心同步脚本 |
-| `tools\codex-turn-complete-monitor.ps1` | 监控本地 rollout 文件中的完成事件 |
-| `tools\codex-turn-complete-monitor.vbs` | 无控制台窗口监控启动器 |
-| `tools\codex-turn-ended-notify.ps1` | 本地弹窗提醒脚本 |
-| `tools\codex-turn-ended-notify.vbs` | 无控制台窗口提醒启动器 |
+| `ai-session-manager-portable.exe` | C#/.NET WPF 原生 GUI |
+| `src\AiSessionManagerWpf\Program.cs` | WPF GUI 源码 |
+| `ai-session-manager.cmd` | 命令行入口 |
+| `tools\ai-session-manager.ps1` | 核心派生脚本 |
+| `tools\ai-session-turn-complete-monitor.ps1` | 监控本地 rollout 文件中的完成事件 |
+| `tools\ai-session-turn-complete-monitor.vbs` | 无控制台窗口监控启动器 |
+| `tools\ai-session-turn-ended-notify.ps1` | 本地弹窗提醒脚本 |
+| `tools\ai-session-turn-ended-notify.vbs` | 无控制台窗口提醒启动器 |
 | `bin\sqlite3.exe` | 便携 SQLite 命令行程序 |
 
 ## 适用场景
@@ -267,31 +253,37 @@ GUI 里的 `弹窗提醒` 默认用于本地提醒。启用后，工具会：
 - 同时维护多个本地 provider 桶；
 - 想保留不同账号视图下的历史连续性；
 - 不想手动改 SQLite 或 rollout 文件；
-- 想用 `-DryRun` 先预览本地历史同步操作。
+- 想用 `-DryRun` 先预览本地历史派生操作。
 
 ## 限制
 
 - 仅支持 Windows。
 - 依赖 Codex Desktop 当前的本地历史文件结构。
-- 不会解密、上传或云同步 Codex 历史。
+- 不会解密、上传或云端派生 Codex 历史。
 - 不会做语义合并；它只复制和更新本地记录。
 - cc-switch 支持是可选功能，并依赖本地 `cc-switch.db` 的结构。
 
 ## 常见问题
 
-如果看不到 Codex 记录，点击 `加载codex账号`，选择包含 `state_5.sqlite` 的 `.codex` 文件夹。
+如果看不到 Codex 记录，点击 `打开配置`，确认 `codexHome` 指向包含 `state_5.sqlite` 的 `.codex` 文件夹。
 
 如果 provider 列表不完整，先用对应 provider 打开一次 Codex，然后回到工具点击 `刷新`。
 
-如果同步时报 rollout 文件正在被写入，暂停当前 Codex 对话或关闭 Codex 后再试。复制逻辑已经内置短暂重试。
+如果派生时报 rollout 文件正在被写入，暂停当前 Codex 对话或关闭 Codex 后再试。复制逻辑已经内置短暂重试。
 
-如果启动 Codex 时看到 `MCP client for node_repl failed to start`，通常是 Codex Desktop 更新后旧运行时路径失效。通过 GUI 切换节点或启用弹窗提醒时，工具会自动修复 `config.toml` 里的 `node_repl.exe`、`node.exe`、`node_modules` 和 `codex.exe` 路径。
+如果启动 Codex 时看到 `MCP client for node_repl failed to start`，通常是 Codex Desktop 更新后旧运行时路径失效。请检查 `config.toml` 里的 `node_repl.exe`、`node.exe`、`node_modules` 和 `codex.exe` 路径。
 
-如果看不到 cc-switch 供应商，点击 `加载cc-switch.db文件`，选择 `cc-switch.db` 或同结构 `.db` 文件。
+如果 GUI 看不到 cc-switch 供应商，点击 `加载cc-switch.db文件`，选择 `cc-switch.db` 或同结构 `.db` 文件。
 
 ## 开发说明
 
-项目刻意使用普通 PowerShell 和 WinForms，不需要构建步骤。GUI 负责交互，真正的历史写入逻辑统一交给 CLI 脚本，这样 GUI 和命令行行为保持一致。
+主 GUI 已迁移到 C#/.NET WPF，使用 `tools\build-exe.ps1` 编译为 `ai-session-manager-portable.exe`。真正的历史写入逻辑仍统一交给 PowerShell CLI 脚本，这样 WPF GUI 和命令行行为保持一致。
+
+重新构建：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\build-exe.ps1
+```
 
 发布前建议检查：
 

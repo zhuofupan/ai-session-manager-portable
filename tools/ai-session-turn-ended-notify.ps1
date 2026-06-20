@@ -28,10 +28,10 @@ function Write-DiagnosticLog {
 
     try {
         $dir = if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) {
-            Join-Path $env:APPDATA 'codex-history-sync-portable'
+            Join-Path $env:APPDATA 'ai-session-manager-portable'
         }
         else {
-            Join-Path ([System.IO.Path]::GetTempPath()) 'codex-history-sync-portable'
+            Join-Path ([System.IO.Path]::GetTempPath()) 'ai-session-manager-portable'
         }
         if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
             New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -1267,7 +1267,7 @@ function Test-ShouldSuppressDuplicateNotification {
             $sha.Dispose()
         }
         $hash = ([BitConverter]::ToString($hashBytes) -replace '-', '').Substring(0, 24)
-        $dedupeDir = Join-Path ([System.IO.Path]::GetTempPath()) 'codex-history-sync-notify'
+        $dedupeDir = Join-Path ([System.IO.Path]::GetTempPath()) 'ai-session-manager-notify'
         New-Item -ItemType Directory -Path $dedupeDir -Force | Out-Null
 
         $now = [DateTime]::UtcNow

@@ -7,6 +7,7 @@ state_5.sqlite
 *.db
 *.db-shm
 *.db-wal
+ai-session-manager-map.json
 codex-history-sync-map.json
 .codex-global-state.json
 
@@ -18,6 +19,7 @@ codex-history-sync-map.json
 *.pfx
 *.p12
 settings.json
+ai-session-manager-config.json
 codex-history-sync-config.json
 .local-state/
 config.local.*
