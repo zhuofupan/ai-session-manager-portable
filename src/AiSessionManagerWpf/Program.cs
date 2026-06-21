@@ -24,7 +24,7 @@ namespace AiSessionManagerPortable
 {
     public static class Program
     {
-        public const string AppVersion = "2026.06.21.03";
+        public const string AppVersion = "2026.06.21.04";
         public const string AppAuthor = "Joff Pan";
         public const string GitHubUrl = "https://github.com/zhuofupan/ai-session-manager-portable";
 
@@ -261,8 +261,12 @@ namespace AiSessionManagerPortable
         private const double DetailNavigationPreviewGap = 10.0;
         private int _refreshGeneration = 0;
         private int _detailNavPreviewHideToken = 0;
+        private int _detailNavPreviewShowToken = 0;
         private int _activeDetailNavPreviewIndex = -1;
         private string _activeDetailNavPreviewSignature = "";
+        private bool _ccSwitchUnifyCodexHistory = false;
+        private string _ccSwitchOfficialHistoryProvider = "";
+        private string _ccSwitchThirdPartyHistoryProvider = "";
         private bool _fullRowsLoading = false;
 
         private readonly JavaScriptSerializer _json = new JavaScriptSerializer { MaxJsonLength = Int32.MaxValue, RecursionLimit = 100 };
@@ -282,9 +286,10 @@ namespace AiSessionManagerPortable
             WriteDiagnostic("Startup config loaded elapsedMs=" + startupSw.ElapsedMilliseconds + " root='" + _rootDir + "' theme='" + _activeTheme.Name + "'.");
             _stateDb = ResolveStateDb();
             _ccSwitchDb = ResolveCcSwitchDb();
+            RefreshCcSwitchHistorySettings();
             WriteDiagnostic("Startup paths resolved elapsedMs=" + startupSw.ElapsedMilliseconds + " stateDb='" + _stateDb + "' ccSwitchDb='" + _ccSwitchDb + "'.");
 
-            Title = "AI 会话管理器 Portable";
+            Title = L("AI 会话管理器 Portable", "AI Session Manager Portable");
             Width = 1360;
             Height = 860;
             MinWidth = 1120;
@@ -366,14 +371,14 @@ namespace AiSessionManagerPortable
             var textStack = new StackPanel();
             textStack.Children.Add(new TextBlock
             {
-                Text = "AI 会话管理器",
+                Text = L("AI 会话管理器", "AI Session Manager"),
                 FontSize = 25,
                 FontWeight = FontWeights.Bold,
                 Foreground = InkBrush()
             });
             textStack.Children.Add(new TextBlock
             {
-                Text = "本地 Codex 会话浏览、派生和启动",
+                Text = L("本地 Codex 会话浏览、派生和启动", "Browse, derive, and launch local Codex sessions"),
                 Margin = new Thickness(0, 4, 0, 0),
                 Foreground = MutedBrush()
             });
@@ -384,14 +389,14 @@ namespace AiSessionManagerPortable
             var meta = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             meta.Children.Add(new TextBlock
             {
-                Text = "v" + Program.AppVersion + "  |  作者 " + Program.AppAuthor + "  |",
+                Text = "v" + Program.AppVersion + "  |  " + L("作者 ", "by ") + Program.AppAuthor + "  |",
                 Foreground = MutedBrush(),
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 8, 0)
             });
             meta.Children.Add(MakeLinkButton("GitHub", delegate { OpenPath(Program.GitHubUrl); }));
             meta.Children.Add(new TextBlock { Text = "|", Foreground = MutedBrush(), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 8, 0) });
-            meta.Children.Add(MakeLinkButton("English", delegate { ShowLanguageNotice(); }));
+            meta.Children.Add(MakeLinkButton(IsEnglish() ? "中文" : "English", delegate { ToggleLanguage(); }));
             Grid.SetColumn(meta, 1);
             grid.Children.Add(meta);
 
@@ -459,7 +464,7 @@ namespace AiSessionManagerPortable
             {
                 Foreground = InkBrush(),
                 VerticalAlignment = VerticalAlignment.Center,
-                Text = "准备就绪"
+                Text = L("准备就绪", "Ready")
             };
             _pathText = new TextBlock
             {
@@ -494,23 +499,23 @@ namespace AiSessionManagerPortable
             commandGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             var primary = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            primary.Children.Add(MakeCommandButton("\uE72C", "刷新", true, delegate { RefreshAll(); }));
-            primary.Children.Add(MakeCommandButton("\uE762", "全选", false, delegate { SetAllPageSelected(true); }));
-            primary.Children.Add(MakeCommandButton("\uE74D", "清空", false, delegate { SetAllPageSelected(false); }));
-            primary.Children.Add(MakeCommandButton("\uE8AB", "交换", false, delegate { SwapProviders(); }));
+            primary.Children.Add(MakeCommandButton("\uE72C", L("刷新", "Refresh"), true, delegate { RefreshAll(); }));
+            primary.Children.Add(MakeCommandButton("\uE762", L("全选", "Select all"), false, delegate { SetAllPageSelected(true); }));
+            primary.Children.Add(MakeCommandButton("\uE74D", L("清空", "Clear"), false, delegate { SetAllPageSelected(false); }));
+            primary.Children.Add(MakeCommandButton("\uE8AB", L("交换", "Swap"), false, delegate { SwapProviders(); }));
             primary.Children.Add(MakeToolbarSeparator());
-            primary.Children.Add(MakeToolbarLabel("派生"));
-            primary.Children.Add(MakeCommandButton("\uE8C8", "派生选中", false, async delegate { await CloneSelectedAsync(); }));
-            primary.Children.Add(MakeCommandButton("\uE8EF", "派生全部", false, async delegate { await SyncAllAsync(); }));
-            primary.Children.Add(MakeCommandButton("\uE8AB", "双向派生", false, async delegate { await MirrorAsync(); }));
+            primary.Children.Add(MakeToolbarLabel(L("派生", "Derive")));
+            primary.Children.Add(MakeCommandButton("\uE8C8", L("派生选中", "Selected"), false, async delegate { await CloneSelectedAsync(); }));
+            primary.Children.Add(MakeCommandButton("\uE8EF", L("派生全部", "All"), false, async delegate { await SyncAllAsync(); }));
+            primary.Children.Add(MakeCommandButton("\uE8AB", L("双向派生", "Two-way"), false, async delegate { await MirrorAsync(); }));
             Grid.SetColumn(primary, 0);
             commandGrid.Children.Add(primary);
 
             var support = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             support.Children.Add(MakeThemeMenuButton());
-            support.Children.Add(MakeCommandButton("\uE713", "配置", false, delegate { EnsureAndOpenConfig(); }));
-            support.Children.Add(MakeCommandButton("\uE897", "帮助", false, delegate { ShowHelpWindow(); }));
-            support.Children.Add(MakeCommandButton("\uE895", "更新", false, async delegate { await CheckUpdateAsync(); }));
+            support.Children.Add(MakeCommandButton("\uE713", L("配置", "Config"), false, delegate { EnsureAndOpenConfig(); }));
+            support.Children.Add(MakeCommandButton("\uE897", L("帮助", "Help"), false, delegate { ShowHelpWindow(); }));
+            support.Children.Add(MakeCommandButton("\uE895", L("更新", "Update"), false, async delegate { await CheckUpdateAsync(); }));
             Grid.SetColumn(support, 2);
             commandGrid.Children.Add(support);
 
@@ -540,8 +545,8 @@ namespace AiSessionManagerPortable
             _targetCombo = MakeCombo();
             _sourceCombo.MinWidth = 124;
             _targetCombo.MinWidth = 124;
-            AddInlineControl(accountGrid, "源账号", _sourceCombo, 0);
-            AddInlineControl(accountGrid, "目标账号", _targetCombo, 2);
+            AddInlineControl(accountGrid, L("源账号", "Source"), _sourceCombo, 0);
+            AddInlineControl(accountGrid, L("目标账号", "Target"), _targetCombo, 2);
             _sourceCombo.SelectionChanged += delegate { if (_suppressUiEvents) return; ApplyFilters(true); SaveConfigWithDetectedInfo(false); };
             _targetCombo.SelectionChanged += delegate { if (_suppressUiEvents) return; SaveConfigWithDetectedInfo(false); };
 
@@ -550,12 +555,12 @@ namespace AiSessionManagerPortable
             _folderCombo.ItemTemplate = BuildFolderComboItemTemplate();
             _folderCombo.ItemContainerStyle = BuildFolderComboItemContainerStyle();
             _folderCombo.MaxDropDownHeight = 360;
-            filters.Children.Add(InlineLabeled("项目目录", _folderCombo, new Thickness(0, 0, 0, 7)));
+            filters.Children.Add(InlineLabeled(L("项目目录", "Project"), _folderCombo, new Thickness(0, 0, 0, 7)));
             _folderCombo.SelectionChanged += delegate { if (_suppressUiEvents) return; ApplyFilters(true); SaveConfigWithDetectedInfo(false); };
 
             _searchBox = new TextBox { Height = 30, Padding = new Thickness(9, 4, 9, 4), BorderBrush = ThemeBorderBrush(), Background = SurfaceBrush(), Foreground = InkBrush() };
             _searchBox.TextChanged += delegate { if (_suppressUiEvents) return; ApplyFilters(true); };
-            filters.Children.Add(InlineLabeled("搜索", _searchBox, new Thickness(0, 0, 0, 7)));
+            filters.Children.Add(InlineLabeled(L("搜索", "Search"), _searchBox, new Thickness(0, 0, 0, 7)));
 
             var optionRow = new Grid { Margin = new Thickness(0, 0, 0, 0) };
             optionRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -565,25 +570,25 @@ namespace AiSessionManagerPortable
             optionRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             optionRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             optionRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            _includeArchivedBox = new CheckBox { Content = "显示归档", VerticalAlignment = VerticalAlignment.Center, IsChecked = _config.IncludeArchived };
+            _includeArchivedBox = new CheckBox { Content = L("显示归档", "Archived"), VerticalAlignment = VerticalAlignment.Center, IsChecked = _config.IncludeArchived };
             _includeArchivedBox.Checked += delegate { if (_suppressUiEvents) return; SaveConfigWithDetectedInfo(false); RefreshAll(); };
             _includeArchivedBox.Unchecked += delegate { if (_suppressUiEvents) return; SaveConfigWithDetectedInfo(false); RefreshAll(); };
             Grid.SetColumn(_includeArchivedBox, 0);
             optionRow.Children.Add(_includeArchivedBox);
             _pageSizeCombo = MakeCombo();
             _pageSizeCombo.Width = 78;
-            foreach (var item in new[] { "30 条", "50 条", "100 条" }) _pageSizeCombo.Items.Add(item);
+            foreach (var item in new[] { L("30 条", "30 rows"), L("50 条", "50 rows"), L("100 条", "100 rows") }) _pageSizeCombo.Items.Add(item);
             if (_config.Limit >= 100) _pageSizeCombo.SelectedIndex = 2;
             else if (_config.Limit >= 50) _pageSizeCombo.SelectedIndex = 1;
             else _pageSizeCombo.SelectedIndex = 0;
             _pageSizeCombo.SelectionChanged += delegate { if (_suppressUiEvents) return; _pageSize = ParsePageSize(); ApplyFilters(true); SaveConfigWithDetectedInfo(false); };
-            var pageLabel = new TextBlock { Text = "每页", Margin = new Thickness(10, 3, 4, 0), Foreground = MutedBrush(), VerticalAlignment = VerticalAlignment.Center };
+            var pageLabel = new TextBlock { Text = L("每页", "Per page"), Margin = new Thickness(10, 3, 4, 0), Foreground = MutedBrush(), VerticalAlignment = VerticalAlignment.Center };
             Grid.SetColumn(pageLabel, 1);
             optionRow.Children.Add(pageLabel);
             Grid.SetColumn(_pageSizeCombo, 2);
             optionRow.Children.Add(_pageSizeCombo);
 
-            _prevButton = MakePagerButton("上一页", delegate { MovePage(-1); });
+            _prevButton = MakePagerButton(L("上一页", "Prev"), delegate { MovePage(-1); });
             Grid.SetColumn(_prevButton, 3);
             optionRow.Children.Add(_prevButton);
 
@@ -602,7 +607,7 @@ namespace AiSessionManagerPortable
             Grid.SetColumn(_countText, 4);
             optionRow.Children.Add(_countText);
 
-            _nextButton = MakePagerButton("下一页", delegate { MovePage(1); });
+            _nextButton = MakePagerButton(L("下一页", "Next"), delegate { MovePage(1); });
             Grid.SetColumn(_nextButton, 5);
             optionRow.Children.Add(_nextButton);
             filters.Children.Add(optionRow);
@@ -637,15 +642,15 @@ namespace AiSessionManagerPortable
             dock.Children.Add(top);
 
             var titleStack = new StackPanel();
-            titleStack.Children.Add(new TextBlock { Text = "会话详情", FontSize = 21, FontWeight = FontWeights.Bold, Foreground = InkBrush() });
-            titleStack.Children.Add(new TextBlock { Text = "查看 transcript、打开文件夹、派生或启动 Codex", Margin = new Thickness(0, 4, 0, 0), Foreground = MutedBrush() });
+            titleStack.Children.Add(new TextBlock { Text = L("会话详情", "Session Details"), FontSize = 21, FontWeight = FontWeights.Bold, Foreground = InkBrush() });
+            titleStack.Children.Add(new TextBlock { Text = L("查看 transcript、打开文件夹、派生或启动 Codex", "View transcript, open folders, derive, or launch Codex"), Margin = new Thickness(0, 4, 0, 0), Foreground = MutedBrush() });
             Grid.SetColumn(titleStack, 0);
             top.Children.Add(titleStack);
 
             var actionStack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            actionStack.Children.Add(MakeCommandButton("\uE8A5", "打开会话", false, delegate { OpenSelectedFile(); }));
-            actionStack.Children.Add(MakeCommandButton("\uE838", "打开目录", false, delegate { OpenSelectedFolder(); }));
-            actionStack.Children.Add(MakeCommandButton("\uE8C8", "复制 ID", false, delegate { CopySelectedId(); }));
+            actionStack.Children.Add(MakeCommandButton("\uE8A5", L("打开会话", "Open session"), false, delegate { OpenSelectedFile(); }));
+            actionStack.Children.Add(MakeCommandButton("\uE838", L("打开目录", "Open folder"), false, delegate { OpenSelectedFolder(); }));
+            actionStack.Children.Add(MakeCommandButton("\uE8C8", L("复制 ID", "Copy ID"), false, delegate { CopySelectedId(); }));
             Grid.SetColumn(actionStack, 1);
             top.Children.Add(actionStack);
 
@@ -658,15 +663,15 @@ namespace AiSessionManagerPortable
             var settingsRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
             Grid.SetRow(settingsRow, 0);
             controls.Children.Add(settingsRow);
-            settingsRow.Children.Add(MakeToolbarLabel("终端"));
-            settingsRow.Children.Add(MakeInlineLabel("账号"));
+            settingsRow.Children.Add(MakeToolbarLabel(L("终端", "Terminal")));
+            settingsRow.Children.Add(MakeInlineLabel(L("账号", "Account")));
             _ccSwitchCombo = MakeCombo();
             _ccSwitchCombo.Width = 190;
             _ccSwitchCombo.Margin = new Thickness(0, 0, 10, 8);
             _ccSwitchCombo.SelectionChanged += delegate { if (_suppressUiEvents) return; SaveConfigWithDetectedInfo(false); };
             settingsRow.Children.Add(_ccSwitchCombo);
 
-            settingsRow.Children.Add(MakeInlineLabel("模型"));
+            settingsRow.Children.Add(MakeInlineLabel(L("模型", "Model")));
             _modelCombo = MakeCombo();
             _modelCombo.Width = 126;
             _modelCombo.Margin = new Thickness(0, 0, 10, 8);
@@ -675,7 +680,7 @@ namespace AiSessionManagerPortable
             _modelCombo.SelectionChanged += delegate { if (_suppressUiEvents) return; SaveConfigWithDetectedInfo(false); };
             settingsRow.Children.Add(_modelCombo);
 
-            settingsRow.Children.Add(MakeInlineLabel("推理"));
+            settingsRow.Children.Add(MakeInlineLabel(L("推理", "Reasoning")));
             _reasoningCombo = MakeCombo();
             _reasoningCombo.Width = 108;
             _reasoningCombo.Margin = new Thickness(0, 0, 10, 8);
@@ -693,12 +698,12 @@ namespace AiSessionManagerPortable
             var optionActions = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Left };
             Grid.SetColumn(optionActions, 0);
             optionsRow.Children.Add(optionActions);
-            optionActions.Children.Add(MakeToolbarLabel("选项"));
-            _loadChatBox = new CheckBox { Content = "+ 会话", Margin = new Thickness(0, 7, 16, 0), IsChecked = _config.LoadChatOnLaunch };
+            optionActions.Children.Add(MakeToolbarLabel(L("选项", "Options")));
+            _loadChatBox = new CheckBox { Content = L("+ 会话", "+ Session"), Margin = new Thickness(0, 7, 16, 0), IsChecked = _config.LoadChatOnLaunch };
             _fastBox = new CheckBox { Content = "Fast", Margin = new Thickness(0, 7, 16, 0), IsChecked = _config.FastModeOnLaunch };
-            _fullAccessBox = new CheckBox { Content = "完全访问", Margin = new Thickness(0, 7, 16, 0), IsChecked = _config.ApprovalNeverOnLaunch };
+            _fullAccessBox = new CheckBox { Content = L("完全访问", "Full access"), Margin = new Thickness(0, 7, 16, 0), IsChecked = _config.ApprovalNeverOnLaunch };
             _usePowerShellBox = new CheckBox { Content = "PowerShell", Margin = new Thickness(0, 7, 16, 0), IsChecked = _config.UsePowerShellTerminal };
-            _turnPopupBox = new CheckBox { Content = "弹窗提醒", Margin = new Thickness(0, 7, 16, 0), IsChecked = _config.TurnCompletePopup };
+            _turnPopupBox = new CheckBox { Content = L("弹窗提醒", "Popup"), Margin = new Thickness(0, 7, 16, 0), IsChecked = _config.TurnCompletePopup };
             _loadChatBox.Checked += delegate { if (_suppressUiEvents) return; SaveConfigWithDetectedInfo(false); };
             _loadChatBox.Unchecked += delegate { if (_suppressUiEvents) return; SaveConfigWithDetectedInfo(false); };
             _fastBox.Checked += delegate { if (_suppressUiEvents) return; SaveConfigWithDetectedInfo(false); };
@@ -713,7 +718,7 @@ namespace AiSessionManagerPortable
             optionActions.Children.Add(_fastBox);
             optionActions.Children.Add(_fullAccessBox);
             optionActions.Children.Add(_usePowerShellBox);
-            var launchButton = MakeCommandButton("\uE756", "启动终端", true, delegate { LaunchTerminal(); });
+            var launchButton = MakeCommandButton("\uE756", L("启动终端", "Launch"), true, delegate { LaunchTerminal(); });
             launchButton.Margin = new Thickness(0, -2, 5, 0);
             launchButton.MinWidth = 88;
             launchButton.Padding = new Thickness(12, 7, 12, 7);
@@ -725,7 +730,7 @@ namespace AiSessionManagerPortable
             rowEndGroup.Children.Add(_turnPopupBox);
             var fontSizeGroup = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top };
             rowEndGroup.Children.Add(fontSizeGroup);
-            fontSizeGroup.Children.Add(MakeInlineLabel("字号"));
+            fontSizeGroup.Children.Add(MakeInlineLabel(L("字号", "Font")));
             _fontSizeBox = new TextBox
             {
                 Width = 46,
@@ -736,7 +741,7 @@ namespace AiSessionManagerPortable
                 BorderBrush = ThemeBorderBrush(),
                 Background = SurfaceBrush(),
                 Foreground = InkBrush(),
-                ToolTip = "会话内容字号，范围 10-24"
+                ToolTip = L("会话内容字号，范围 10-24", "Conversation font size, range 10-24")
             };
             _fontSizeBox.LostFocus += delegate { ApplyFontSizeInput(); };
             _fontSizeBox.KeyDown += delegate(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) ApplyFontSizeInput(); };
@@ -939,7 +944,7 @@ namespace AiSessionManagerPortable
             dock.AppendChild(icon);
 
             var count = new FrameworkElementFactory(typeof(TextBlock));
-            count.SetBinding(TextBlock.TextProperty, new Binding("ItemCount") { StringFormat = "{0} 条" });
+            count.SetBinding(TextBlock.TextProperty, new Binding("ItemCount") { StringFormat = IsEnglish() ? "{0} items" : "{0} 条" });
             count.SetValue(TextBlock.ForegroundProperty, FolderCountBrush());
             count.SetValue(TextBlock.FontSizeProperty, 11.5);
             count.SetValue(FrameworkElement.MarginProperty, new Thickness(8, 1, 0, 0));
@@ -1178,7 +1183,7 @@ namespace AiSessionManagerPortable
 
         private Button MakeThemeMenuButton()
         {
-            var button = MakeCommandButton("\uE790", "皮肤", false, delegate { });
+            var button = MakeCommandButton("\uE790", L("皮肤", "Theme"), false, delegate { });
             button.Click += delegate
             {
                 var menu = BuildThemeMenu();
@@ -1250,6 +1255,7 @@ namespace AiSessionManagerPortable
             if (_detailNavPopup != null) _detailNavPopup.IsOpen = false;
             var oldSuppress = _suppressConfigSave;
             _suppressConfigSave = true;
+            Title = L("AI 会话管理器 Portable", "AI Session Manager Portable");
             Background = AppBackgroundBrush();
             Content = BuildLayout();
             RunWithoutUiEvents(delegate
@@ -1261,6 +1267,41 @@ namespace AiSessionManagerPortable
             ApplyFilters(false);
             if (!String.IsNullOrWhiteSpace(selectedId)) SelectSessionById(selectedId);
             UpdatePathText();
+        }
+
+        private bool IsEnglish()
+        {
+            return !String.IsNullOrWhiteSpace(_config.UiLanguage) &&
+                _config.UiLanguage.StartsWith("en", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private string L(string zh, string en)
+        {
+            return IsEnglish() ? en : zh;
+        }
+
+        private string AllAccountsLabel()
+        {
+            return L("全部账号", "All accounts");
+        }
+
+        private string AllFoldersLabel()
+        {
+            return L("全部目录", "All projects");
+        }
+
+        private string NoSwitchLabel()
+        {
+            return L("不切换", "No switch");
+        }
+
+        private void ToggleLanguage()
+        {
+            var selectedId = GetActiveDetailRow() == null ? "" : GetActiveDetailRow().Id;
+            _config.UiLanguage = IsEnglish() ? "zh-CN" : "en-US";
+            SaveConfigWithDetectedInfo(true);
+            RebuildLayoutForTheme(selectedId);
+            SetStatus(IsEnglish() ? "Language switched to English." : "已切换为中文。");
         }
 
         private void RunWithoutUiEvents(Action action)
@@ -1445,7 +1486,7 @@ namespace AiSessionManagerPortable
         {
             button.Click += delegate(object sender, RoutedEventArgs e)
             {
-                if (!String.IsNullOrWhiteSpace(actionText)) SetStatus("已触发：" + actionText);
+                if (!String.IsNullOrWhiteSpace(actionText)) SetStatus(L("已触发：", "Triggered: ") + actionText);
                 handler(sender, e);
             };
         }
@@ -1959,6 +2000,7 @@ namespace AiSessionManagerPortable
                 _activeTheme = ResolveTheme(_config.UiTheme);
                 _stateDb = ResolveStateDb();
                 _ccSwitchDb = ResolveCcSwitchDb();
+                RefreshCcSwitchHistorySettings();
                 WriteDiagnostic("RefreshAll resolved paths elapsedMs=" + sw.ElapsedMilliseconds + " stateDb='" + _stateDb + "' ccSwitchDb='" + _ccSwitchDb + "'.");
                 var stateDb = _stateDb;
                 var ccSwitchDb = _ccSwitchDb;
@@ -2147,7 +2189,7 @@ namespace AiSessionManagerPortable
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(s => s)
                 .ToList();
-            _sourceCombo.Items.Add(new ProviderItem { Label = "全部账号", Value = "__all__" });
+            _sourceCombo.Items.Add(new ProviderItem { Label = AllAccountsLabel(), Value = "__all__" });
             foreach (var p in providers)
             {
                 _sourceCombo.Items.Add(new ProviderItem { Label = p, Value = ProviderValue(p) });
@@ -2158,7 +2200,7 @@ namespace AiSessionManagerPortable
             if (_targetCombo.SelectedIndex < 0 && _targetCombo.Items.Count > 0) _targetCombo.SelectedIndex = 0;
 
             _folderCombo.Items.Clear();
-            _folderCombo.Items.Add("全部目录");
+            _folderCombo.Items.Add(AllFoldersLabel());
             foreach (var cwd in _allRows.Select(r => r.Cwd).Where(s => !String.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s))
                 _folderCombo.Items.Add(cwd);
             if (!String.IsNullOrWhiteSpace(oldFolder) && _folderCombo.Items.Contains(oldFolder)) _folderCombo.SelectedItem = oldFolder;
@@ -2218,12 +2260,39 @@ namespace AiSessionManagerPortable
             return nodes;
         }
 
+        private void RefreshCcSwitchHistorySettings()
+        {
+            _ccSwitchUnifyCodexHistory = false;
+            _ccSwitchOfficialHistoryProvider = "";
+            _ccSwitchThirdPartyHistoryProvider = "";
+            try
+            {
+                var dir = String.IsNullOrWhiteSpace(_ccSwitchDb) ? "" : Path.GetDirectoryName(_ccSwitchDb);
+                var settingsPath = String.IsNullOrWhiteSpace(dir) ? "" : Path.Combine(dir, "settings.json");
+                if (String.IsNullOrWhiteSpace(settingsPath) || !File.Exists(settingsPath)) return;
+                var settings = _json.DeserializeObject(File.ReadAllText(settingsPath, Encoding.UTF8)) as Dictionary<string, object>;
+                _ccSwitchUnifyCodexHistory = GetBool(settings, "unifyCodexSessionHistory", false);
+                var migrations = GetDict(settings, "localMigrations");
+                var official = GetDict(migrations, "codexOfficialHistoryUnifyV1");
+                var thirdParty = GetDict(migrations, "codexThirdPartyHistoryProviderBucketV1");
+                _ccSwitchOfficialHistoryProvider = GetString(official, "targetProviderId");
+                _ccSwitchThirdPartyHistoryProvider = GetString(thirdParty, "targetProviderId");
+                WriteDiagnostic("CcSwitchHistorySettings unify=" + _ccSwitchUnifyCodexHistory +
+                    " officialTarget='" + _ccSwitchOfficialHistoryProvider +
+                    "' thirdPartyTarget='" + _ccSwitchThirdPartyHistoryProvider + "'.");
+            }
+            catch (Exception ex)
+            {
+                WriteDiagnostic("CcSwitchHistorySettings failed: " + ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+
         private void PopulateCcSwitchCombo()
         {
             if (_ccSwitchCombo == null) return;
             var previous = SelectedCcSwitchNodeKey();
             _ccSwitchCombo.Items.Clear();
-            _ccSwitchCombo.Items.Add("不切换");
+            _ccSwitchCombo.Items.Add(NoSwitchLabel());
             foreach (var node in _ccSwitchNodes) _ccSwitchCombo.Items.Add(node);
             SelectCcSwitchNode(DefaultString(previous, _config.DefaultCcSwitchNode));
             if (_ccSwitchCombo.SelectedIndex < 0) _ccSwitchCombo.SelectedIndex = 0;
@@ -2445,7 +2514,7 @@ namespace AiSessionManagerPortable
         private string SelectedFolderFilter()
         {
             var folder = _folderCombo == null ? "" : _folderCombo.SelectedItem as string;
-            return String.IsNullOrWhiteSpace(folder) || folder == "全部目录" ? "" : folder;
+            return String.IsNullOrWhiteSpace(folder) || folder == AllFoldersLabel() ? "" : folder;
         }
 
         private static string SelectedComboText(ComboBox combo, string fallback)
@@ -2515,7 +2584,7 @@ namespace AiSessionManagerPortable
             {
                 if (!includeArchived && row.Archived) continue;
                 if (!String.IsNullOrWhiteSpace(provider) && provider != "__all__" && !String.Equals(ProviderValue(row.Provider), provider, StringComparison.OrdinalIgnoreCase)) continue;
-                if (!String.IsNullOrWhiteSpace(folder) && folder != "全部目录" && !String.Equals(row.Cwd, folder, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!String.IsNullOrWhiteSpace(folder) && folder != AllFoldersLabel() && !String.Equals(row.Cwd, folder, StringComparison.OrdinalIgnoreCase)) continue;
                 if (!String.IsNullOrWhiteSpace(search))
                 {
                     var hay = (row.Title + "\n" + row.Id + "\n" + row.Cwd + "\n" + row.Provider).ToLowerInvariant();
@@ -2574,8 +2643,8 @@ namespace AiSessionManagerPortable
                 _pageRows.Add(row);
                 offset++;
             }
-            _countText.Text = "第 " + (_pageIndex + 1) + " / " + pageCount + " 页";
-            _countText.ToolTip = _filteredRows.Count + " / " + _allRows.Count + " 条";
+            _countText.Text = IsEnglish() ? "Page " + (_pageIndex + 1) + " / " + pageCount : "第 " + (_pageIndex + 1) + " / " + pageCount + " 页";
+            _countText.ToolTip = _filteredRows.Count + " / " + _allRows.Count + (IsEnglish() ? " items" : " 条");
             _prevButton.IsEnabled = _pageIndex > 0;
             _nextButton.IsEnabled = _pageIndex < pageCount - 1;
             if (_pageRows.Count > 0 && autoSelect) _sessionList.SelectedIndex = 0;
@@ -2644,6 +2713,7 @@ namespace AiSessionManagerPortable
                 if (String.IsNullOrWhiteSpace(resolved)) throw new InvalidOperationException("没有找到可识别的 cc-switch.db 或 .db 文件。");
                 _config.CcSwitchHome = Path.GetDirectoryName(resolved);
                 _ccSwitchDb = resolved;
+                RefreshCcSwitchHistorySettings();
                 LoadCcSwitchNodes();
                 PopulateCcSwitchCombo();
                 SaveConfigWithDetectedInfo(true);
@@ -2691,11 +2761,6 @@ namespace AiSessionManagerPortable
         {
             if (!File.Exists(_configPath)) SaveConfigWithDetectedInfo(true);
             OpenPath(_configPath);
-        }
-
-        private void ShowLanguageNotice()
-        {
-            System.Windows.MessageBox.Show("WPF 主界面已保留 English 入口；完整英文界面切换会在下一轮把所有 WPF 文案字典化后启用。", "English", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         private void ShowHelpWindow()
@@ -3465,7 +3530,7 @@ namespace AiSessionManagerPortable
                 BorderThickness = new Thickness(0, 0, 0, 1),
                 Cursor = Cursors.Hand
             };
-            b.MouseEnter += delegate { ShowNavigationPreviewPopup(b, activeIndex, visibleIndexes); };
+            b.MouseEnter += delegate { ScheduleNavigationPreviewShow(b, activeIndex, visibleIndexes); };
             ApplyDetailNavigationButtonChrome(b);
             AttachClickFeedback(b, "", handler);
             return b;
@@ -3481,7 +3546,9 @@ namespace AiSessionManagerPortable
             var y = Math.Max(0, Math.Min(navHeight - 0.1, position.Y));
             var slot = Math.Max(0, Math.Min(_detailNavVisibleIndexes.Count - 1, (int)Math.Floor(y / slotHeight)));
             var activeIndex = _detailNavVisibleIndexes[slot];
-            ShowNavigationPreviewPopup(_detailNavHitBox ?? (UIElement)_detailNav, activeIndex, _detailNavVisibleIndexes);
+            var target = _detailNavHitBox ?? (UIElement)_detailNav;
+            if (_detailNavPopup != null && _detailNavPopup.IsOpen) ShowNavigationPreviewPopup(target, activeIndex, _detailNavVisibleIndexes);
+            else ScheduleNavigationPreviewShow(target, activeIndex, _detailNavVisibleIndexes);
         }
 
         private void ApplyDetailNavigationButtonChrome(Button button)
@@ -3531,6 +3598,19 @@ namespace AiSessionManagerPortable
             _detailNavPopup.HorizontalOffset = location.X;
             _detailNavPopup.VerticalOffset = location.Y;
             _detailNavPopup.IsOpen = true;
+        }
+
+        private async void ScheduleNavigationPreviewShow(UIElement target, int activeIndex, List<int> visibleIndexes)
+        {
+            if (_detailNavPopup == null) return;
+            _detailNavPreviewHideToken++;
+            var token = ++_detailNavPreviewShowToken;
+            await Task.Delay(100);
+            if (token != _detailNavPreviewShowToken) return;
+            var overHitBox = _detailNavHitBox != null && _detailNavHitBox.IsMouseOver;
+            var overNav = _detailNav != null && _detailNav.IsMouseOver;
+            if (!overHitBox && !overNav) return;
+            ShowNavigationPreviewPopup(target, activeIndex, visibleIndexes);
         }
 
         private static string BuildNavigationPreviewSignature(List<int> visibleIndexes)
@@ -3633,6 +3713,7 @@ namespace AiSessionManagerPortable
 
         private async void ScheduleNavigationPreviewHide()
         {
+            _detailNavPreviewShowToken++;
             var token = ++_detailNavPreviewHideToken;
             await Task.Delay(260);
             if (token != _detailNavPreviewHideToken) return;
@@ -4112,13 +4193,37 @@ namespace AiSessionManagerPortable
 
         private string BuildLaunchProviderInfo(CcSwitchNode node)
         {
-            if (node == null) return "启动节点：不切换（使用当前 Codex 配置）";
+            if (node == null) return L("启动节点：不切换（使用当前 Codex 配置）", "Launch node: no switch (use current Codex config)");
             var lines = new List<string>();
-            lines.Add("启动节点：" + node.ToString());
-            lines.Add("历史账号：" + DefaultString(node.HistoryProvider, "未识别") + "  |  Codex provider：" + DefaultString(node.ModelProvider, "未识别"));
+            lines.Add(L("启动节点：", "Launch node: ") + node.ToString());
+            lines.Add(L("历史账号：", "History account: ") + DefaultString(node.HistoryProvider, IsOfficialCodexNode(node) ? "openai" : "custom") +
+                "  |  Codex provider: " + GetDisplayCodexProvider(node));
             if (!String.IsNullOrWhiteSpace(node.BaseUrl)) lines.Add("Base URL：" + node.BaseUrl);
-            if (String.Equals(node.AuthMode, "chatgpt", StringComparison.OrdinalIgnoreCase)) lines.Add("认证：ChatGPT 登录");
+            if (String.Equals(node.AuthMode, "chatgpt", StringComparison.OrdinalIgnoreCase)) lines.Add(L("认证：ChatGPT 登录", "Auth: ChatGPT login"));
             return String.Join(Environment.NewLine, lines.ToArray());
+        }
+
+        private string GetDisplayCodexProvider(CcSwitchNode node)
+        {
+            if (node == null) return "custom";
+            if (!String.IsNullOrWhiteSpace(node.ModelProvider)) return node.ModelProvider;
+            if (IsOfficialCodexNode(node))
+            {
+                if (_ccSwitchUnifyCodexHistory) return DefaultString(_ccSwitchOfficialHistoryProvider, "custom");
+                return "official";
+            }
+            if (_ccSwitchUnifyCodexHistory) return DefaultString(_ccSwitchThirdPartyHistoryProvider, "custom");
+            return DefaultString(node.HistoryProvider, "custom");
+        }
+
+        private static bool IsOfficialCodexNode(CcSwitchNode node)
+        {
+            if (node == null) return false;
+            var id = node.Id ?? "";
+            var name = (node.Name ?? "").ToLowerInvariant().Replace(" ", "");
+            return String.Equals(id, "codex-official", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("openaiofficial") ||
+                String.Equals(node.AuthMode, "chatgpt", StringComparison.OrdinalIgnoreCase);
         }
 
         private async Task RunBusyAsync(string message, Action action)
