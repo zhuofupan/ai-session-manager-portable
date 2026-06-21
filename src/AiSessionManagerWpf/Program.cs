@@ -24,7 +24,7 @@ namespace AiSessionManagerPortable
 {
     public static class Program
     {
-        public const string AppVersion = "2026.06.21.06";
+        public const string AppVersion = "2026.06.21.07";
         public const string AppAuthor = "Joff Pan";
         public const string GitHubUrl = "https://github.com/zhuofupan/ai-session-manager-portable";
 
@@ -3648,9 +3648,9 @@ namespace AiSessionManagerPortable
             panel.MouseEnter += delegate { _detailNavPreviewHideToken++; };
             panel.MouseLeave += delegate { ScheduleNavigationPreviewHide(); };
             _detailNavPopup.Child = panel;
-            _detailNavPopup.Placement = PlacementMode.Left;
+            _detailNavPopup.Placement = PlacementMode.Relative;
             _detailNavPopup.PlacementTarget = (_detailNavHitBox as UIElement) ?? (_detailNav as UIElement) ?? target;
-            _detailNavPopup.HorizontalOffset = -DetailNavigationPreviewGap;
+            _detailNavPopup.HorizontalOffset = -(DetailNavigationPreviewWidth + DetailNavigationPreviewGap);
             _detailNavPopup.VerticalOffset = CalculateNavigationPreviewVerticalOffset(panel);
             _detailNavPopup.IsOpen = true;
         }
@@ -3757,10 +3757,10 @@ namespace AiSessionManagerPortable
                 var popupHeight = MeasureElementHeight(panel, DetailNavigationPreviewWidth, 120.0);
                 var targetHeight = Math.Max(1.0, target.ActualHeight);
                 var offset = Math.Round((targetHeight - popupHeight) / 2.0);
-                WriteDiagnostic("NavPreview placement mode=Left targetSize=" +
+                WriteDiagnostic("NavPreview placement mode=RelativeLeft targetSize=" +
                     Math.Round(target.ActualWidth) + "x" + Math.Round(targetHeight) +
                     " popupHeight=" + Math.Round(popupHeight) +
-                    " horizontalOffset=" + (-DetailNavigationPreviewGap) +
+                    " horizontalOffset=" + (-(DetailNavigationPreviewWidth + DetailNavigationPreviewGap)) +
                     " verticalOffset=" + offset + ".");
                 return offset;
             }
