@@ -177,9 +177,12 @@ When `Fast` is checked in the WPF GUI, the launch command passes `service_tier=f
 
 ## Updates And Older Versions
 
-The GUI `更新` button first checks whether the current directory is a clean Git worktree. If `.git` exists and there are no local changes, it runs `git pull --ff-only origin main`; otherwise it opens the GitHub project page so users can download or inspect the latest version manually.
+The GUI `更新` button supports two update paths:
 
-This is not an in-place hot update of the running executable. Windows usually locks the currently running `ai-session-manager-portable.exe`, so older versions should be closed before replacing the exe, or updated from a Git worktree and then restarted. Config files are forward-compatible with new fields, and the legacy `codex-history-sync-map.json` mapping file is migrated automatically.
+- In a clean Git worktree, it runs `git fetch` first. If `origin/main` is newer, the temporary updater waits for the main app to exit, then runs `git pull --ff-only origin main` and rebuilds the executable.
+- In a portable release folder without `.git`, it checks GitHub Releases, prefers a directly replaceable `ai-session-manager-portable*.exe` asset, and verifies the matching `.sha256` file when the release provides one.
+
+Windows locks the currently running `ai-session-manager-portable.exe`, so the app no longer updates the target while the main process is alive and no longer uses a hidden PowerShell self-replacement script. The update button copies the current exe as a temporary updater, exits the main app, waits for the process to close, replaces or rebuilds the target exe, and restarts the app from that same executable code path. This is easier for antivirus products to evaluate than a hidden `powershell -WindowStyle Hidden` self-replacement script and leaves a straightforward update log. Config files are forward-compatible with new fields, and the legacy `codex-history-sync-map.json` mapping file is migrated automatically.
 
 ## Derive Semantics
 
@@ -294,7 +297,7 @@ If `启动终端` opens a CMD window but Codex does not continue launching, ask 
 
 When PowerShell works but CMD does not, check `launch-codex.log` first, especially `Resolved codex`, `where codex`, `cd exit`, and `Main exit`.
 
-Antivirus warnings are usually heuristic false positives caused by an unsigned low-reputation utility that starts PowerShell/CMD and ships local script launchers. For public distribution, ship the source and exe together through GitHub Releases, publish a SHA256 checksum, avoid packers/obfuscators, and prefer code signing for official builds. The project avoids high-risk launch flags such as `ExecutionPolicy Bypass`, but code signing or vendor allowlisting is still the durable fix.
+Antivirus warnings are usually heuristic false positives caused by an unsigned low-reputation utility that starts PowerShell/CMD/VBS and ships local script launchers. The project avoids packers, obfuscators, `ExecutionPolicy Bypass`, and hidden PowerShell for self-updates. For public distribution, ship source, a portable zip, a standalone exe, and SHA256 files through GitHub Releases. Code signing or vendor allowlisting remains the durable fix.
 
 ## Development Notes
 

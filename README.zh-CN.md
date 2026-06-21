@@ -176,9 +176,12 @@ WPF GUI 勾选 `Fast` 时，启动命令会追加 `service_tier=fast`。
 
 ## 更新与老版本兼容
 
-GUI 右上角的 `更新` 按钮会先判断当前目录是否是干净的 Git 工作区。如果存在 `.git` 且没有未提交改动，它会执行 `git pull --ff-only origin main`；否则会打开 GitHub 项目页面，让用户手动下载或查看最新版本。
+GUI 右上角的 `更新` 按钮支持两种路径：
 
-这不是“运行中替换 exe”的热更新。Windows 通常会锁定正在运行的 `ai-session-manager-portable.exe`，所以老版本需要关闭软件后再替换 exe，或者在 Git 工作区里拉取更新并重新运行。配置文件向后兼容新字段，旧版映射文件 `codex-history-sync-map.json` 也会自动迁移到当前映射文件。
+- 如果当前目录是干净的 Git 工作区，它会先执行 `git fetch`。如果 `origin/main` 有新版本，临时 updater 会在主程序退出后执行 `git pull --ff-only origin main`，再重新构建新版 exe。
+- 如果当前目录不是 Git 工作区，它会检查 GitHub Releases，优先下载可直接替换的 `ai-session-manager-portable*.exe` 资产，并校验对应 `.sha256`（如果 Release 提供）。
+
+Windows 会锁定正在运行的 `ai-session-manager-portable.exe`，所以软件不会在主程序还活着时更新目标 exe，也不会再用隐藏 PowerShell 脚本强行替换自身。更新按钮会复制当前 exe 作为临时 updater，退出主程序后由这个同源 updater 等待进程结束、替换或重建 exe、再重启软件。这样比隐藏 `powershell -WindowStyle Hidden` 的自替换脚本更容易被杀毒软件接受，也更容易排查日志。配置文件向后兼容新字段，旧版映射文件 `codex-history-sync-map.json` 也会自动迁移到当前映射文件。
 
 ## 派生规则
 
@@ -296,7 +299,7 @@ GUI 里的 `弹窗提醒` 默认用于本地提醒。启用后，工具会：
 
 如果 PowerShell 能启动但 CMD 没反应，优先查看 `launch-codex.log` 里的 `Resolved codex`、`where codex`、`cd exit` 和 `Main exit`。
 
-如果杀毒软件提示风险，通常是未签名的小众工具、会启动 PowerShell/CMD、并包含本地脚本启动器造成的启发式误报。建议发布时使用 GitHub Releases 的源码和 exe 一起分发，提供 SHA256，避免压缩壳/混淆；正式分发前最好做代码签名。项目已尽量避免 `ExecutionPolicy Bypass` 这类高风险启动参数，但无法替代厂商白名单或代码签名。
+如果杀毒软件提示风险，通常是未签名的小众工具、会启动 PowerShell/CMD/VBS、并包含本地脚本启动器造成的启发式误报。项目避免压缩壳、混淆和 `ExecutionPolicy Bypass`，更新替换也不再使用隐藏 PowerShell 脚本。正式分发建议通过 GitHub Releases 同时提供源码、portable zip、独立 exe 和 SHA256；最稳定的解决方案仍然是代码签名或厂商白名单。
 
 ## 开发说明
 

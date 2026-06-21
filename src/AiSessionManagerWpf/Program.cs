@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -26,25 +27,269 @@ using System.Windows.Media.Imaging;
 [assembly: AssemblyCompany("Joff Pan")]
 [assembly: AssemblyProduct("AI Session Manager Portable")]
 [assembly: AssemblyCopyright("Copyright (c) Joff Pan")]
-[assembly: AssemblyVersion("2026.6.21.16")]
-[assembly: AssemblyFileVersion("2026.6.21.16")]
+[assembly: AssemblyVersion("2026.6.22.1")]
+[assembly: AssemblyFileVersion("2026.6.22.1")]
 
 namespace AiSessionManagerPortable
 {
     public static class Program
     {
-        public const string AppVersion = "2026.06.21.16";
+        public const string AppVersion = "2026.06.22.1";
         public const string AppAuthor = "Joff Pan";
         public const string GitHubUrl = "https://github.com/zhuofupan/ai-session-manager-portable";
+        public const string GitHubLatestReleaseApiUrl = "https://api.github.com/repos/zhuofupan/ai-session-manager-portable/releases/latest";
+        public const string GitHubLatestReleaseUrl = "https://github.com/zhuofupan/ai-session-manager-portable/releases/latest";
 
         [STAThread]
-        public static void Main()
+        public static void Main(string[] args)
         {
+            if (args != null && args.Length > 0 && String.Equals(args[0], "--apply-update", StringComparison.OrdinalIgnoreCase))
+            {
+                Environment.ExitCode = ApplyUpdate(args);
+                return;
+            }
+            if (args != null && args.Length > 0 && String.Equals(args[0], "--apply-git-update", StringComparison.OrdinalIgnoreCase))
+            {
+                Environment.ExitCode = ApplyGitUpdate(args);
+                return;
+            }
+
             try { NativeMethods.SetCurrentProcessExplicitAppUserModelID("JoffPan.AiSessionManagerPortable.Wpf"); } catch { }
             var app = new Application();
             app.ShutdownMode = ShutdownMode.OnMainWindowClose;
             var root = AppDomain.CurrentDomain.BaseDirectory;
             app.Run(new MainWindow(root));
+        }
+
+        private static int ApplyUpdate(string[] args)
+        {
+            var values = ParseCommandLineOptions(args);
+            var sourceExe = GetOption(values, "source");
+            var targetExe = GetOption(values, "target");
+            var rootDir = GetOption(values, "root");
+            var pidText = GetOption(values, "pid");
+            var logPath = Path.Combine(GetAppStateDirectory(), "apply-ai-session-manager-update.log");
+
+            try
+            {
+                File.WriteAllText(logPath, "===== AI Session Manager update apply log =====" + Environment.NewLine, new UTF8Encoding(false));
+                WriteUpdateLog(logPath, "Source: " + sourceExe);
+                WriteUpdateLog(logPath, "Target: " + targetExe);
+                WriteUpdateLog(logPath, "Root: " + rootDir);
+
+                int pid;
+                if (Int32.TryParse(pidText, out pid) && pid > 0)
+                {
+                    try
+                    {
+                        var process = Process.GetProcessById(pid);
+                        process.WaitForExit(60000);
+                        process.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        WriteUpdateLog(logPath, "Wait failed: " + ex.Message);
+                    }
+                }
+
+                if (String.IsNullOrWhiteSpace(sourceExe) || !File.Exists(sourceExe)) throw new FileNotFoundException("Update source was not found.", sourceExe);
+                if (String.IsNullOrWhiteSpace(targetExe)) throw new InvalidOperationException("Update target is empty.");
+                if (String.IsNullOrWhiteSpace(rootDir)) rootDir = Path.GetDirectoryName(targetExe);
+
+                var copied = false;
+                for (var i = 0; i < 80; i++)
+                {
+                    try
+                    {
+                        File.Copy(sourceExe, targetExe, true);
+                        copied = true;
+                        WriteUpdateLog(logPath, "Copy succeeded.");
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        WriteUpdateLog(logPath, "Copy attempt " + (i + 1) + " failed: " + ex.Message);
+                        System.Threading.Thread.Sleep(500);
+                    }
+                }
+                if (!copied) return 2;
+
+                try
+                {
+                    Process.Start(new ProcessStartInfo(targetExe) { WorkingDirectory = rootDir, UseShellExecute = false });
+                    WriteUpdateLog(logPath, "Restarted app.");
+                }
+                catch (Exception ex)
+                {
+                    WriteUpdateLog(logPath, "Restart failed: " + ex.Message);
+                }
+                try { File.Delete(sourceExe); } catch { }
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                try { WriteUpdateLog(logPath, "Apply failed: " + ex.GetType().FullName + ": " + ex.Message); } catch { }
+                return 1;
+            }
+        }
+
+        private static int ApplyGitUpdate(string[] args)
+        {
+            var values = ParseCommandLineOptions(args);
+            var targetExe = GetOption(values, "target");
+            var rootDir = GetOption(values, "root");
+            var pidText = GetOption(values, "pid");
+            var logPath = Path.Combine(GetAppStateDirectory(), "apply-ai-session-manager-update.log");
+
+            try
+            {
+                File.WriteAllText(logPath, "===== AI Session Manager git update log =====" + Environment.NewLine, new UTF8Encoding(false));
+                WriteUpdateLog(logPath, "Target: " + targetExe);
+                WriteUpdateLog(logPath, "Root: " + rootDir);
+
+                int pid;
+                if (Int32.TryParse(pidText, out pid) && pid > 0)
+                {
+                    try
+                    {
+                        var process = Process.GetProcessById(pid);
+                        process.WaitForExit(60000);
+                        process.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        WriteUpdateLog(logPath, "Wait failed: " + ex.Message);
+                    }
+                }
+
+                if (String.IsNullOrWhiteSpace(rootDir) || !Directory.Exists(rootDir)) throw new DirectoryNotFoundException("Update root was not found: " + rootDir);
+                if (String.IsNullOrWhiteSpace(targetExe)) throw new InvalidOperationException("Update target is empty.");
+
+                var pullExit = RunUpdaterProcess(logPath, "git.exe", "pull --ff-only origin main", rootDir, 120000);
+                if (pullExit != 0) return 3;
+
+                var buildScript = Path.Combine(rootDir, "tools", "build-exe.ps1");
+                if (!File.Exists(buildScript)) throw new FileNotFoundException("Build script was not found.", buildScript);
+
+                var buildExit = RunUpdaterProcess(
+                    logPath,
+                    "powershell.exe",
+                    "-NoProfile -ExecutionPolicy RemoteSigned -File " + QuoteUpdaterArg(buildScript) + " -OutputPath " + QuoteUpdaterArg(targetExe),
+                    rootDir,
+                    120000);
+                if (buildExit != 0) return 4;
+                if (!File.Exists(targetExe)) throw new FileNotFoundException("Updated exe was not generated.", targetExe);
+
+                try
+                {
+                    Process.Start(new ProcessStartInfo(targetExe) { WorkingDirectory = rootDir, UseShellExecute = false });
+                    WriteUpdateLog(logPath, "Restarted app.");
+                }
+                catch (Exception ex)
+                {
+                    WriteUpdateLog(logPath, "Restart failed: " + ex.Message);
+                }
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                try { WriteUpdateLog(logPath, "Git apply failed: " + ex.GetType().FullName + ": " + ex.Message); } catch { }
+                return 1;
+            }
+        }
+
+        private static Dictionary<string, string> ParseCommandLineOptions(string[] args)
+        {
+            var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            for (var i = 1; i < args.Length; i++)
+            {
+                var key = args[i] ?? "";
+                if (!key.StartsWith("--", StringComparison.Ordinal)) continue;
+                key = key.Substring(2);
+                var value = "";
+                if (i + 1 < args.Length && !(args[i + 1] ?? "").StartsWith("--", StringComparison.Ordinal))
+                    value = args[++i] ?? "";
+                values[key] = value;
+            }
+            return values;
+        }
+
+        private static string GetOption(Dictionary<string, string> values, string key)
+        {
+            string value;
+            return values != null && values.TryGetValue(key, out value) ? value : "";
+        }
+
+        private static string GetAppStateDirectory()
+        {
+            var roaming = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            var dir = String.IsNullOrWhiteSpace(roaming)
+                ? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".local-state")
+                : Path.Combine(roaming, "ai-session-manager-portable");
+            try { if (!Directory.Exists(dir)) Directory.CreateDirectory(dir); } catch { }
+            return dir;
+        }
+
+        private static void WriteUpdateLog(string logPath, string message)
+        {
+            File.AppendAllText(logPath, "[" + DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss.fff zzz") + "] " + (message ?? "") + Environment.NewLine, new UTF8Encoding(false));
+        }
+
+        private static int RunUpdaterProcess(string logPath, string file, string args, string cwd, int timeoutMs)
+        {
+            try
+            {
+                var sw = Stopwatch.StartNew();
+                var psi = new ProcessStartInfo(file, args)
+                {
+                    WorkingDirectory = cwd,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8
+                };
+                using (var p = new Process())
+                {
+                    var stdout = new StringBuilder();
+                    var stderr = new StringBuilder();
+                    p.StartInfo = psi;
+                    p.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e)
+                    {
+                        if (e.Data != null) stdout.AppendLine(e.Data);
+                    };
+                    p.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e)
+                    {
+                        if (e.Data != null) stderr.AppendLine(e.Data);
+                    };
+                    p.Start();
+                    p.BeginOutputReadLine();
+                    p.BeginErrorReadLine();
+                    if (!p.WaitForExit(timeoutMs))
+                    {
+                        try { p.Kill(); } catch { }
+                        WriteUpdateLog(logPath, file + " timed out.");
+                        return -1;
+                    }
+                    p.WaitForExit();
+                    WriteUpdateLog(logPath, file + " exit=" + p.ExitCode + " elapsedMs=" + sw.ElapsedMilliseconds);
+                    if (stdout.Length > 0) WriteUpdateLog(logPath, "stdout: " + stdout.ToString().Trim());
+                    if (stderr.Length > 0) WriteUpdateLog(logPath, "stderr: " + stderr.ToString().Trim());
+                    return p.ExitCode;
+                }
+            }
+            catch (Exception ex)
+            {
+                WriteUpdateLog(logPath, file + " failed: " + ex.GetType().FullName + ": " + ex.Message);
+                return -1;
+            }
+        }
+
+        private static string QuoteUpdaterArg(string value)
+        {
+            if (value == null) value = "";
+            return "\"" + value.Replace("\"", "\\\"") + "\"";
         }
     }
 
@@ -3001,122 +3246,325 @@ namespace AiSessionManagerPortable
             {
                 if (!Directory.Exists(Path.Combine(_rootDir, ".git")))
                 {
-                    Dispatcher.Invoke(new Action(delegate { OpenPath(Program.GitHubUrl); }));
+                    UpdateFromLatestRelease();
                     return;
                 }
 
-                var status = RunProcess("git.exe", "status --porcelain", _rootDir, 20000).Output.Trim();
-                if (!String.IsNullOrWhiteSpace(status))
-                {
-                    Dispatcher.Invoke(new Action(delegate
-                    {
-                        System.Windows.MessageBox.Show(
-                            L("当前目录有本地修改，已停止自动更新，避免覆盖你的改动。\n\n请先提交、暂存或备份这些改动后再更新。",
-                              "The working tree has local changes. Automatic update was stopped to avoid overwriting your work.\n\nCommit, stash, or back up those changes before updating."),
-                            L("检查更新", "Check Update"),
-                            MessageBoxButton.OK,
-                            MessageBoxImage.Warning);
-                    }));
-                    return;
-                }
-
-                var before = RunProcess("git.exe", "rev-parse --short HEAD", _rootDir, 20000).Output.Trim();
-                RunProcess("git.exe", "fetch origin main", _rootDir, 120000);
-                var remote = RunProcess("git.exe", "rev-parse --short origin/main", _rootDir, 20000).Output.Trim();
-                if (String.Equals(before, remote, StringComparison.OrdinalIgnoreCase))
-                {
-                    Dispatcher.Invoke(new Action(delegate
-                    {
-                        System.Windows.MessageBox.Show(
-                            L("已是最新版本。\n\n当前版本：", "Already up to date.\n\nCurrent version: ") + Program.AppVersion +
-                            "\nHEAD: " + before,
-                            L("检查更新", "Check Update"),
-                            MessageBoxButton.OK,
-                            MessageBoxImage.Information);
-                    }));
-                    return;
-                }
-
-                var pull = RunProcess("git.exe", "pull --ff-only origin main", _rootDir, 120000).Output.Trim();
-                var after = RunProcess("git.exe", "rev-parse --short HEAD", _rootDir, 20000).Output.Trim();
-                var tempExe = Path.Combine(GetAppStateDirectory(), "ai-session-manager-portable.update.exe");
-                if (File.Exists(tempExe)) File.Delete(tempExe);
-                var build = RunProcess("powershell.exe",
-                    "-NoProfile -ExecutionPolicy RemoteSigned -File " + QuoteArg(Path.Combine(_rootDir, "tools", "build-exe.ps1")) + " -OutputPath " + QuoteArg(tempExe),
-                    _rootDir,
-                    120000).Output.Trim();
-                if (!File.Exists(tempExe)) throw new InvalidOperationException("更新已拉取，但未生成新版 exe。\n\n" + build);
-
-                var restart = false;
-                Dispatcher.Invoke(new Action(delegate
-                {
-                    restart = System.Windows.MessageBox.Show(
-                        L("更新已下载并构建完成，重启后生效。\n\n", "Update downloaded and built. Restart to apply it.\n\n") +
-                        "HEAD: " + before + " -> " + after + "\n\n" +
-                        L("是否现在重启并替换程序？", "Restart now and replace the app?"),
-                        L("检查更新", "Check Update"),
-                        MessageBoxButton.YesNo,
-                        MessageBoxImage.Information) == MessageBoxResult.Yes;
-                }));
-
-                if (!restart)
-                {
-                    Dispatcher.Invoke(new Action(delegate
-                    {
-                        SetStatus(L("更新已构建，重启软件后手动替换可生效：", "Update built. Replace manually after exiting: ") + tempExe);
-                    }));
-                    return;
-                }
-
-                var currentExe = Assembly.GetEntryAssembly().Location;
-                var scriptPath = WriteApplyUpdateScript(tempExe, currentExe, _rootDir, Process.GetCurrentProcess().Id);
-                Process.Start(new ProcessStartInfo("powershell.exe",
-                    "-NoProfile -ExecutionPolicy RemoteSigned -WindowStyle Hidden -File " + QuoteArg(scriptPath))
-                {
-                    WorkingDirectory = _rootDir,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                });
-                Dispatcher.Invoke(new Action(delegate { Application.Current.Shutdown(); }));
+                UpdateFromGitWorktree();
             });
         }
 
-        private string WriteApplyUpdateScript(string sourceExe, string targetExe, string rootDir, int processId)
+        private void UpdateFromGitWorktree()
         {
-            var scriptPath = Path.Combine(GetAppStateDirectory(), "apply-ai-session-manager-update.ps1");
-            var logPath = Path.Combine(GetAppStateDirectory(), "apply-ai-session-manager-update.log");
-            var sb = new StringBuilder();
-            sb.AppendLine("$ErrorActionPreference = 'Continue'");
-            sb.AppendLine("$SourceExe = " + QuotePowerShell(sourceExe));
-            sb.AppendLine("$TargetExe = " + QuotePowerShell(targetExe));
-            sb.AppendLine("$RootDir = " + QuotePowerShell(rootDir));
-            sb.AppendLine("$LogPath = " + QuotePowerShell(logPath));
-            sb.AppendLine("$AppProcessId = " + processId.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            sb.AppendLine("function Write-UpdateLog([string]$Message) { Add-Content -LiteralPath $LogPath -Encoding UTF8 -Value ('[{0:yyyy-MM-dd HH:mm:ss.fff}] {1}' -f (Get-Date), $Message) }");
-            sb.AppendLine("Set-Content -LiteralPath $LogPath -Encoding UTF8 -Value '===== AI Session Manager update apply log ====='");
-            sb.AppendLine("Write-UpdateLog ('Source: ' + $SourceExe)");
-            sb.AppendLine("Write-UpdateLog ('Target: ' + $TargetExe)");
-            sb.AppendLine("try { Wait-Process -Id $AppProcessId -Timeout 60 -ErrorAction SilentlyContinue } catch { Write-UpdateLog ('Wait failed: ' + $_.Exception.Message) }");
-            sb.AppendLine("$copied = $false");
-            sb.AppendLine("for ($i = 0; $i -lt 60; $i++) {");
-            sb.AppendLine("  try {");
-            sb.AppendLine("    Copy-Item -LiteralPath $SourceExe -Destination $TargetExe -Force");
-            sb.AppendLine("    $copied = $true");
-            sb.AppendLine("    Write-UpdateLog 'Copy succeeded.'");
-            sb.AppendLine("    break");
-            sb.AppendLine("  } catch {");
-            sb.AppendLine("    Write-UpdateLog ('Copy attempt ' + ($i + 1) + ' failed: ' + $_.Exception.Message)");
-            sb.AppendLine("    Start-Sleep -Milliseconds 500");
-            sb.AppendLine("  }");
-            sb.AppendLine("}");
-            sb.AppendLine("if ($copied) {");
-            sb.AppendLine("  try { Start-Process -FilePath $TargetExe -WorkingDirectory $RootDir; Write-UpdateLog 'Restarted app.' } catch { Write-UpdateLog ('Restart failed: ' + $_.Exception.Message) }");
-            sb.AppendLine("  try { Remove-Item -LiteralPath $SourceExe -Force -ErrorAction SilentlyContinue } catch { }");
-            sb.AppendLine("} else {");
-            sb.AppendLine("  Write-UpdateLog 'Copy failed after all attempts.'");
-            sb.AppendLine("}");
-            File.WriteAllText(scriptPath, sb.ToString(), new UTF8Encoding(false));
-            return scriptPath;
+            var status = RunProcess("git.exe", "status --porcelain", _rootDir, 20000).Output.Trim();
+            if (!String.IsNullOrWhiteSpace(status))
+            {
+                Dispatcher.Invoke(new Action(delegate
+                {
+                    System.Windows.MessageBox.Show(
+                        L("当前目录有本地修改，已停止自动更新，避免覆盖你的改动。\n\n请先提交、暂存或备份这些改动后再更新。",
+                          "The working tree has local changes. Automatic update was stopped to avoid overwriting your work.\n\nCommit, stash, or back up those changes before updating."),
+                        L("检查更新", "Check Update"),
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                }));
+                return;
+            }
+
+            var before = RunProcess("git.exe", "rev-parse --short HEAD", _rootDir, 20000).Output.Trim();
+            RunProcess("git.exe", "fetch origin main", _rootDir, 120000);
+            var remote = RunProcess("git.exe", "rev-parse --short origin/main", _rootDir, 20000).Output.Trim();
+            if (String.Equals(before, remote, StringComparison.OrdinalIgnoreCase))
+            {
+                Dispatcher.Invoke(new Action(delegate
+                {
+                    System.Windows.MessageBox.Show(
+                        L("已是最新版本。\n\n当前版本：", "Already up to date.\n\nCurrent version: ") + Program.AppVersion +
+                        "\nHEAD: " + before,
+                        L("检查更新", "Check Update"),
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                }));
+                return;
+            }
+
+            PromptAndApplyGitUpdate(
+                before,
+                remote,
+                L("检测到 Git 工作区有新版本。\n\n", "A newer Git revision is available.\n\n") +
+                "HEAD: " + before + " -> " + remote + "\n\n" +
+                L("是否现在重启并更新程序？", "Restart now and update the app?"));
+        }
+
+        private void UpdateFromLatestRelease()
+        {
+            var release = GetLatestReleaseInfo();
+            if (release == null || String.IsNullOrWhiteSpace(release.TagName))
+            {
+                Dispatcher.Invoke(new Action(delegate { OpenPath(Program.GitHubLatestReleaseUrl); }));
+                return;
+            }
+
+            var compare = CompareVersionLabels(release.TagName, Program.AppVersion);
+            if (compare <= 0)
+            {
+                Dispatcher.Invoke(new Action(delegate
+                {
+                    System.Windows.MessageBox.Show(
+                        L("已是最新版本。\n\n当前版本：", "Already up to date.\n\nCurrent version: ") + Program.AppVersion +
+                        "\nLatest: " + release.TagName,
+                        L("检查更新", "Check Update"),
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                }));
+                return;
+            }
+
+            if (String.IsNullOrWhiteSpace(release.ExeUrl))
+            {
+                Dispatcher.Invoke(new Action(delegate
+                {
+                    System.Windows.MessageBox.Show(
+                        L("发现新版本，但该 Release 没有可直接热更新的 exe 资产。\n\n将打开下载页面，请下载 portable zip 手动替换。",
+                          "A new version is available, but the release has no exe asset for in-place update.\n\nThe download page will open; download the portable zip and replace manually."),
+                        L("检查更新", "Check Update"),
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                    OpenPath(String.IsNullOrWhiteSpace(release.HtmlUrl) ? Program.GitHubLatestReleaseUrl : release.HtmlUrl);
+                }));
+                return;
+            }
+
+            var tempExe = Path.Combine(GetAppStateDirectory(), "ai-session-manager-portable.release-update.exe");
+            if (File.Exists(tempExe)) File.Delete(tempExe);
+            DownloadFile(release.ExeUrl, tempExe);
+            if (!String.IsNullOrWhiteSpace(release.ExeSha256Url))
+            {
+                var expected = DownloadString(release.ExeSha256Url);
+                VerifySha256(tempExe, expected);
+            }
+
+            PromptAndApplyUpdate(
+                tempExe,
+                L("已下载 GitHub Release 新版本。\n\n", "Downloaded the latest GitHub Release.\n\n") +
+                "Current: " + Program.AppVersion + "\nLatest: " + release.TagName + "\n\n" +
+                L("是否现在重启并替换程序？", "Restart now and replace the app?"));
+        }
+
+        private void PromptAndApplyUpdate(string tempExe, string message)
+        {
+            var restart = false;
+            Dispatcher.Invoke(new Action(delegate
+            {
+                restart = System.Windows.MessageBox.Show(
+                    message,
+                    L("检查更新", "Check Update"),
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Information) == MessageBoxResult.Yes;
+            }));
+
+            if (!restart)
+            {
+                Dispatcher.Invoke(new Action(delegate
+                {
+                    SetStatus(L("更新已准备好，重启软件后手动替换可生效：", "Update is ready. Replace manually after exiting: ") + tempExe);
+                }));
+                return;
+            }
+
+            var currentExe = Assembly.GetEntryAssembly().Location;
+            var updaterExe = Path.Combine(GetAppStateDirectory(), "ai-session-manager-updater.exe");
+            if (File.Exists(updaterExe)) File.Delete(updaterExe);
+            File.Copy(currentExe, updaterExe, true);
+
+            Process.Start(new ProcessStartInfo(
+                updaterExe,
+                "--apply-update --source " + QuoteArg(tempExe) +
+                " --target " + QuoteArg(currentExe) +
+                " --root " + QuoteArg(_rootDir) +
+                " --pid " + Process.GetCurrentProcess().Id.ToString(System.Globalization.CultureInfo.InvariantCulture))
+            {
+                WorkingDirectory = _rootDir,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+            Dispatcher.Invoke(new Action(delegate { Application.Current.Shutdown(); }));
+        }
+
+        private void PromptAndApplyGitUpdate(string before, string remote, string message)
+        {
+            var restart = false;
+            Dispatcher.Invoke(new Action(delegate
+            {
+                restart = System.Windows.MessageBox.Show(
+                    message,
+                    L("检查更新", "Check Update"),
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Information) == MessageBoxResult.Yes;
+            }));
+
+            if (!restart)
+            {
+                Dispatcher.Invoke(new Action(delegate
+                {
+                    SetStatus(L("检测到新版本，未重启更新：", "New revision detected, update not restarted: ") + before + " -> " + remote);
+                }));
+                return;
+            }
+
+            var currentExe = Assembly.GetEntryAssembly().Location;
+            var updaterExe = Path.Combine(GetAppStateDirectory(), "ai-session-manager-updater.exe");
+            if (File.Exists(updaterExe)) File.Delete(updaterExe);
+            File.Copy(currentExe, updaterExe, true);
+
+            Process.Start(new ProcessStartInfo(
+                updaterExe,
+                "--apply-git-update" +
+                " --target " + QuoteArg(currentExe) +
+                " --root " + QuoteArg(_rootDir) +
+                " --pid " + Process.GetCurrentProcess().Id.ToString(System.Globalization.CultureInfo.InvariantCulture))
+            {
+                WorkingDirectory = _rootDir,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+            Dispatcher.Invoke(new Action(delegate { Application.Current.Shutdown(); }));
+        }
+
+        private ReleaseInfo GetLatestReleaseInfo()
+        {
+            var json = DownloadString(Program.GitHubLatestReleaseApiUrl);
+            var dict = _json.DeserializeObject(json) as Dictionary<string, object>;
+            if (dict == null) return null;
+
+            var release = new ReleaseInfo
+            {
+                TagName = GetString(dict, "tag_name"),
+                HtmlUrl = GetString(dict, "html_url")
+            };
+
+            var assets = ToObjectList(dict.ContainsKey("assets") ? dict["assets"] : null);
+            var exeAssetName = "";
+            foreach (var item in assets)
+            {
+                var asset = item as Dictionary<string, object>;
+                if (asset == null) continue;
+                var name = GetString(asset, "name");
+                var url = GetString(asset, "browser_download_url");
+                if (String.IsNullOrWhiteSpace(name) || String.IsNullOrWhiteSpace(url)) continue;
+
+                if (name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) &&
+                    name.StartsWith("ai-session-manager-portable", StringComparison.OrdinalIgnoreCase))
+                {
+                    release.ExeUrl = url;
+                    exeAssetName = name;
+                    continue;
+                }
+            }
+
+            if (!String.IsNullOrWhiteSpace(exeAssetName))
+            {
+                foreach (var item in assets)
+                {
+                    var asset = item as Dictionary<string, object>;
+                    if (asset == null) continue;
+                    var name = GetString(asset, "name");
+                    var url = GetString(asset, "browser_download_url");
+                    if (String.Equals(name, exeAssetName + ".sha256", StringComparison.OrdinalIgnoreCase))
+                    {
+                        release.ExeSha256Url = url;
+                        break;
+                    }
+                }
+            }
+            return release;
+        }
+
+        private static List<object> ToObjectList(object value)
+        {
+            var list = new List<object>();
+            if (value == null) return list;
+            var arr = value as object[];
+            if (arr != null) { list.AddRange(arr); return list; }
+            var enumerable = value as IEnumerable;
+            if (enumerable != null && !(value is string))
+            {
+                foreach (var item in enumerable) list.Add(item);
+            }
+            return list;
+        }
+
+        private static string DownloadString(string url)
+        {
+            using (var client = NewWebClient())
+            {
+                return client.DownloadString(url);
+            }
+        }
+
+        private static void DownloadFile(string url, string path)
+        {
+            using (var client = NewWebClient())
+            {
+                client.DownloadFile(url, path);
+            }
+        }
+
+        private static System.Net.WebClient NewWebClient()
+        {
+            try { System.Net.ServicePointManager.SecurityProtocol |= (System.Net.SecurityProtocolType)3072; } catch { }
+            var client = new System.Net.WebClient();
+            client.Headers[System.Net.HttpRequestHeader.UserAgent] = "AI-Session-Manager-Portable/" + Program.AppVersion;
+            client.Headers[System.Net.HttpRequestHeader.Accept] = "application/vnd.github+json, application/octet-stream";
+            return client;
+        }
+
+        private static void VerifySha256(string path, string checksumText)
+        {
+            var match = Regex.Match(checksumText ?? "", @"(?i)\b[a-f0-9]{64}\b");
+            if (!match.Success) return;
+            string actual;
+            using (var sha = SHA256.Create())
+            using (var stream = File.OpenRead(path))
+            {
+                actual = BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "").ToLowerInvariant();
+            }
+            if (!String.Equals(actual, match.Value.ToLowerInvariant(), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Downloaded update checksum did not match.");
+        }
+
+        private static int CompareVersionLabels(string left, string right)
+        {
+            var a = ParseVersionNumbers(left);
+            var b = ParseVersionNumbers(right);
+            var count = Math.Max(a.Length, b.Length);
+            for (var i = 0; i < count; i++)
+            {
+                var av = i < a.Length ? a[i] : 0;
+                var bv = i < b.Length ? b[i] : 0;
+                if (av != bv) return av.CompareTo(bv);
+            }
+            return 0;
+        }
+
+        private static int[] ParseVersionNumbers(string value)
+        {
+            var matches = Regex.Matches(value ?? "", @"\d+");
+            var numbers = new List<int>();
+            foreach (Match match in matches)
+            {
+                int n;
+                if (Int32.TryParse(match.Value, out n)) numbers.Add(n);
+            }
+            return numbers.ToArray();
+        }
+
+        private sealed class ReleaseInfo
+        {
+            public string TagName;
+            public string HtmlUrl;
+            public string ExeUrl;
+            public string ExeSha256Url;
         }
 
         private int ParsePageSize()
