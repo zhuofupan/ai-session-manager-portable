@@ -18,7 +18,7 @@ Next
 argsFile.Write "]"
 argsFile.Close
 
-command = "powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File " & Q(ps1Path) & " -ArgFile " & Q(argsPath)
+command = "powershell.exe -NoProfile -STA -ExecutionPolicy RemoteSigned -File " & Q(ps1Path) & " -ArgFile " & Q(argsPath)
 
 shell.Run command, 0, False
 

@@ -8,7 +8,7 @@ Set fso = CreateObject("Scripting.FileSystemObject")
 scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
 ps1Path = fso.BuildPath(scriptDir, "ai-session-turn-complete-monitor.ps1")
 
-command = "powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File " & Q(ps1Path)
+command = "powershell.exe -NoProfile -STA -ExecutionPolicy RemoteSigned -File " & Q(ps1Path)
 For i = 0 To WScript.Arguments.Count - 1
     command = command & " " & Q(WScript.Arguments(i))
 Next

@@ -284,6 +284,18 @@ If Codex startup shows `MCP client for node_repl failed to start`, the usual cau
 
 If cc-switch providers do not appear, click `加载cc-switch.db文件` and choose `cc-switch.db` or a compatible `.db` file.
 
+If `启动终端` opens a CMD window but Codex does not continue launching, ask the user for these files:
+
+```text
+%APPDATA%\ai-session-manager-portable\launch-codex.log
+%APPDATA%\ai-session-manager-portable\launch-codex.cmd
+%APPDATA%\ai-session-manager-portable\wpf-diagnostic.log
+```
+
+When PowerShell works but CMD does not, check `launch-codex.log` first, especially `Resolved codex`, `where codex`, `cd exit`, and `Main exit`.
+
+Antivirus warnings are usually heuristic false positives caused by an unsigned low-reputation utility that starts PowerShell/CMD and ships local script launchers. For public distribution, ship the source and exe together through GitHub Releases, publish a SHA256 checksum, avoid packers/obfuscators, and prefer code signing for official builds. The project avoids high-risk launch flags such as `ExecutionPolicy Bypass`, but code signing or vendor allowlisting is still the durable fix.
+
 ## Development Notes
 
 The main GUI is C#/.NET WPF and is compiled to `ai-session-manager-portable.exe` with `tools\build-exe.ps1`. Actual history writes still go through the shared PowerShell CLI engine, so the WPF GUI and command line keep the same derive behavior.
@@ -291,7 +303,7 @@ The main GUI is C#/.NET WPF and is compiled to `ai-session-manager-portable.exe`
 Rebuild:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\build-exe.ps1
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File tools\build-exe.ps1
 ```
 
 Recommended pre-release checks:

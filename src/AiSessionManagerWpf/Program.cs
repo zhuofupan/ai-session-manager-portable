@@ -5,6 +5,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -20,11 +21,19 @@ using System.Windows.Media;
 using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 
+[assembly: AssemblyTitle("AI Session Manager Portable")]
+[assembly: AssemblyDescription("Local-first Codex session browser, derive, and launch utility.")]
+[assembly: AssemblyCompany("Joff Pan")]
+[assembly: AssemblyProduct("AI Session Manager Portable")]
+[assembly: AssemblyCopyright("Copyright (c) Joff Pan")]
+[assembly: AssemblyVersion("2026.6.21.12")]
+[assembly: AssemblyFileVersion("2026.6.21.12")]
+
 namespace AiSessionManagerPortable
 {
     public static class Program
     {
-        public const string AppVersion = "2026.06.21.11";
+        public const string AppVersion = "2026.06.21.12";
         public const string AppAuthor = "Joff Pan";
         public const string GitHubUrl = "https://github.com/zhuofupan/ai-session-manager-portable";
 
@@ -4554,16 +4563,30 @@ namespace AiSessionManagerPortable
             CleanInvalidCodexServiceTier();
             var launchEnvironment = BuildLaunchEnvironment(launchNode);
             var launchProviderInfo = BuildLaunchProviderInfo(launchNode);
+            var launchLogPath = GetLaunchLogPath();
+            WriteDiagnostic("LaunchTerminal terminal=" +
+                ((_usePowerShellBox != null && _usePowerShellBox.IsChecked == true) ? "powershell" : "cmd") +
+                " cwd='" + cwd + "' codex='" + codex + "' codexHome='" + codexHome +
+                "' args='" + ShortenForLog(BuildCommandPreview(codex, args), 260) +
+                "' launchLog='" + launchLogPath + "'.");
             if (_usePowerShellBox != null && _usePowerShellBox.IsChecked == true)
             {
-                var scriptPath = WritePowerShellLaunchScript(cwd, codex, args, codexHome, resumeSession, fallbackArgs, launchNotice, launchProviderInfo);
-                StartTerminalProcess("powershell.exe", "-NoExit -NoLogo -NoProfile -ExecutionPolicy Bypass -File " + QuoteArg(scriptPath), launchEnvironment);
+                var scriptPath = WritePowerShellLaunchScript(cwd, codex, args, codexHome, resumeSession, fallbackArgs, launchNotice, launchProviderInfo, launchLogPath);
+                WriteDiagnostic("LaunchTerminal powershell script='" + scriptPath + "'.");
+                StartTerminalProcess("powershell.exe", "-NoExit -NoLogo -NoProfile -ExecutionPolicy RemoteSigned -File " + QuoteArg(scriptPath), launchEnvironment);
             }
             else
             {
-                var scriptPath = WriteCmdLaunchScript(cwd, codex, args, codexHome, resumeSession, fallbackArgs, launchNotice, launchProviderInfo);
+                var scriptPath = WriteCmdLaunchScript(cwd, codex, args, codexHome, resumeSession, fallbackArgs, launchNotice, launchProviderInfo, launchLogPath);
+                WriteDiagnostic("LaunchTerminal cmd script='" + scriptPath + "'.");
                 StartTerminalProcess("cmd.exe", "/d /k call " + QuoteCmdArg(scriptPath), launchEnvironment);
             }
+            SetStatus("已启动终端。诊断日志：" + launchLogPath);
+        }
+
+        private static string GetLaunchLogPath()
+        {
+            return Path.Combine(GetAppStateDirectory(), "launch-codex.log");
         }
 
         private string ResolveCodexHomeForSession(SessionRow row)
@@ -4764,66 +4787,122 @@ namespace AiSessionManagerPortable
             catch { }
         }
 
-        private string WriteCmdLaunchScript(string cwd, string codex, List<string> args, string codexHome, bool allowResumeFallback, List<string> fallbackArgs, string launchNotice, string launchProviderInfo)
+        private string WriteCmdLaunchScript(string cwd, string codex, List<string> args, string codexHome, bool allowResumeFallback, List<string> fallbackArgs, string launchNotice, string launchProviderInfo, string launchLogPath)
         {
             var scriptPath = Path.Combine(GetAppStateDirectory(), "launch-codex.cmd");
             var sb = new StringBuilder();
             sb.AppendLine("@echo off");
+            sb.AppendLine("setlocal EnableExtensions DisableDelayedExpansion");
             sb.AppendLine("chcp 65001 >nul");
+            sb.AppendLine("set " + QuoteCmdSet("ASM_LOG", launchLogPath));
+            sb.AppendLine("> \"%ASM_LOG%\" echo ===== AI Session Manager Codex launch log =====");
+            sb.AppendLine(">> \"%ASM_LOG%\" echo Time: %DATE% %TIME%");
+            sb.AppendLine(">> \"%ASM_LOG%\" echo AppVersion: " + EscapeCmdEcho(Program.AppVersion));
+            sb.AppendLine(">> \"%ASM_LOG%\" echo Script: %~f0");
+            sb.AppendLine(">> \"%ASM_LOG%\" echo ComSpec: %COMSPEC%");
+            sb.AppendLine(">> \"%ASM_LOG%\" echo Initial CD: %CD%");
+            sb.AppendLine("echo(诊断日志: " + EscapeCmdEcho(launchLogPath));
             sb.AppendLine("cd /d " + QuoteCmdArg(cwd));
+            sb.AppendLine("set \"ASM_CD_EXIT=%ERRORLEVEL%\"");
+            sb.AppendLine(">> \"%ASM_LOG%\" echo cd exit: %ASM_CD_EXIT%");
+            sb.AppendLine("if not \"%ASM_CD_EXIT%\"==\"0\" echo(切换工作目录失败，详见诊断日志。");
+            sb.AppendLine("if not \"%ASM_CD_EXIT%\"==\"0\" goto LaunchDone");
             if (!String.IsNullOrWhiteSpace(codexHome)) sb.AppendLine("set " + QuoteCmdSet("CODEX_HOME", codexHome));
+            if (!String.IsNullOrWhiteSpace(codexHome)) sb.AppendLine(">> \"%ASM_LOG%\" echo CODEX_HOME: " + EscapeCmdEcho(codexHome));
             sb.AppendLine("echo(工作目录: " + EscapeCmdEcho(cwd));
             if (!String.IsNullOrWhiteSpace(codexHome)) sb.AppendLine("echo(CODEX_HOME: " + EscapeCmdEcho(codexHome));
             foreach (var line in SplitLines(launchProviderInfo)) sb.AppendLine("echo(" + EscapeCmdEcho(line));
             if (!String.IsNullOrWhiteSpace(launchNotice)) sb.AppendLine("echo(" + EscapeCmdEcho(launchNotice));
+            sb.AppendLine(">> \"%ASM_LOG%\" echo Resolved codex: " + EscapeCmdEcho(codex));
+            if (LooksLikePath(codex))
+            {
+                sb.AppendLine("if exist " + QuoteCmdArg(codex) + " (>> \"%ASM_LOG%\" echo Codex file exists.) else (>> \"%ASM_LOG%\" echo Codex file missing.)");
+            }
+            else
+            {
+                sb.AppendLine(">> \"%ASM_LOG%\" echo where codex:");
+                sb.AppendLine("where " + EscapeBareCmdToken(codex) + " >> \"%ASM_LOG%\" 2>&1");
+                sb.AppendLine(">> \"%ASM_LOG%\" echo where exit: %ERRORLEVEL%");
+            }
+            sb.AppendLine(">> \"%ASM_LOG%\" echo Command: " + EscapeCmdEcho(BuildCommandPreview(codex, args)));
             sb.AppendLine("echo(命令: " + EscapeCmdEcho(BuildCommandPreview(codex, args)));
             sb.AppendLine("echo(");
             sb.AppendLine("echo(正在启动 Codex...");
+            sb.AppendLine(">> \"%ASM_LOG%\" echo Start main: %DATE% %TIME%");
             sb.AppendLine(BuildCmdLaunchCommand(codex, args));
+            sb.AppendLine("set \"ASM_MAIN_EXIT=%ERRORLEVEL%\"");
+            sb.AppendLine(">> \"%ASM_LOG%\" echo Main exit: %ASM_MAIN_EXIT% at %DATE% %TIME%");
+            if (allowResumeFallback) sb.AppendLine("if not \"%ASM_MAIN_EXIT%\"==\"0\" goto ResumeFallback");
+            sb.AppendLine("goto LaunchDone");
             if (allowResumeFallback)
             {
-                sb.AppendLine("if errorlevel 1 (");
-                sb.AppendLine("  echo(");
-                sb.AppendLine("  echo(恢复会话失败，正在改为新开 Codex...");
-                sb.AppendLine("  echo(命令: " + EscapeCmdEcho(BuildCommandPreview(codex, fallbackArgs)));
-                sb.AppendLine("  " + BuildCmdLaunchCommand(codex, fallbackArgs));
-                sb.AppendLine(")");
+                sb.AppendLine(":ResumeFallback");
+                sb.AppendLine("echo(");
+                sb.AppendLine("echo(恢复会话失败，正在改为新开 Codex...");
+                sb.AppendLine(">> \"%ASM_LOG%\" echo Resume failed, running fallback.");
+                sb.AppendLine(">> \"%ASM_LOG%\" echo Fallback command: " + EscapeCmdEcho(BuildCommandPreview(codex, fallbackArgs)));
+                sb.AppendLine("echo(命令: " + EscapeCmdEcho(BuildCommandPreview(codex, fallbackArgs)));
+                sb.AppendLine(BuildCmdLaunchCommand(codex, fallbackArgs));
+                sb.AppendLine("set \"ASM_FALLBACK_EXIT=%ERRORLEVEL%\"");
+                sb.AppendLine(">> \"%ASM_LOG%\" echo Fallback exit: %ASM_FALLBACK_EXIT% at %DATE% %TIME%");
             }
+            sb.AppendLine(":LaunchDone");
             sb.AppendLine("echo(");
+            sb.AppendLine("echo(诊断日志: " + EscapeCmdEcho(launchLogPath));
+            sb.AppendLine(">> \"%ASM_LOG%\" echo Done: %DATE% %TIME%");
             sb.AppendLine("echo(Codex 已退出，窗口保持打开以便查看输出。");
             File.WriteAllText(scriptPath, sb.ToString(), new UTF8Encoding(false));
             return scriptPath;
         }
 
-        private string WritePowerShellLaunchScript(string cwd, string codex, List<string> args, string codexHome, bool allowResumeFallback, List<string> fallbackArgs, string launchNotice, string launchProviderInfo)
+        private string WritePowerShellLaunchScript(string cwd, string codex, List<string> args, string codexHome, bool allowResumeFallback, List<string> fallbackArgs, string launchNotice, string launchProviderInfo, string launchLogPath)
         {
             var scriptPath = Path.Combine(GetAppStateDirectory(), "launch-codex.ps1");
             var sb = new StringBuilder();
             sb.AppendLine("$OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8");
+            sb.AppendLine("$LaunchLog = " + QuotePowerShell(launchLogPath));
+            sb.AppendLine("Set-Content -LiteralPath $LaunchLog -Encoding UTF8 -Value '===== AI Session Manager Codex launch log ====='");
+            sb.AppendLine("function Write-LaunchLog([string]$Message) { Add-Content -LiteralPath $LaunchLog -Encoding UTF8 -Value ('[{0:yyyy-MM-dd HH:mm:ss.fff}] {1}' -f (Get-Date), $Message) }");
+            sb.AppendLine("Write-LaunchLog " + QuotePowerShell("AppVersion: " + Program.AppVersion));
+            sb.AppendLine("Write-LaunchLog ('Script: ' + $PSCommandPath)");
+            sb.AppendLine("Write-LaunchLog ('Initial location: ' + (Get-Location).Path)");
             sb.AppendLine("Set-Location -LiteralPath " + QuotePowerShell(cwd));
+            sb.AppendLine("Write-LaunchLog ('Set-Location: ' + (Get-Location).Path)");
             if (!String.IsNullOrWhiteSpace(codexHome)) sb.AppendLine("$env:CODEX_HOME = " + QuotePowerShell(codexHome));
+            if (!String.IsNullOrWhiteSpace(codexHome)) sb.AppendLine("Write-LaunchLog ('CODEX_HOME: ' + $env:CODEX_HOME)");
             sb.AppendLine("Write-Host ('工作目录: ' + (Get-Location).Path)");
+            sb.AppendLine("Write-Host ('诊断日志: ' + $LaunchLog)");
             if (!String.IsNullOrWhiteSpace(codexHome)) sb.AppendLine("Write-Host ('CODEX_HOME: ' + $env:CODEX_HOME)");
             foreach (var line in SplitLines(launchProviderInfo)) sb.AppendLine("Write-Host " + QuotePowerShell(line));
             if (!String.IsNullOrWhiteSpace(launchNotice)) sb.AppendLine("Write-Host " + QuotePowerShell(launchNotice));
+            sb.AppendLine("Write-LaunchLog " + QuotePowerShell("Resolved codex: " + codex));
+            sb.AppendLine("try { $cmd = Get-Command " + QuotePowerShell(codex) + " -ErrorAction SilentlyContinue; if ($cmd) { Write-LaunchLog ('Get-Command: ' + $cmd.Source) } else { Write-LaunchLog 'Get-Command: not found' } } catch { Write-LaunchLog ('Get-Command error: ' + $_.Exception.Message) }");
+            sb.AppendLine("Write-LaunchLog " + QuotePowerShell("Command: " + BuildCommandPreview(codex, args)));
             sb.AppendLine("Write-Host " + QuotePowerShell("命令: " + BuildCommandPreview(codex, args)));
             sb.AppendLine("Write-Host ''");
             sb.AppendLine("Write-Host '正在启动 Codex...'");
+            sb.AppendLine("Write-LaunchLog 'Start main command.'");
             var command = "& " + QuotePowerShell(codex);
             foreach (var arg in args) command += " " + QuotePowerShell(arg);
             sb.AppendLine(command);
+            sb.AppendLine("Write-LaunchLog ('Main exit: ' + $LASTEXITCODE)");
             if (allowResumeFallback)
             {
                 sb.AppendLine("if ($LASTEXITCODE -ne 0) {");
                 sb.AppendLine("  Write-Host ''");
                 sb.AppendLine("  Write-Host '恢复会话失败，正在改为新开 Codex...'");
+                sb.AppendLine("  Write-LaunchLog 'Resume failed, running fallback.'");
                 sb.AppendLine("  Write-Host " + QuotePowerShell("命令: " + BuildCommandPreview(codex, fallbackArgs)));
+                sb.AppendLine("  Write-LaunchLog " + QuotePowerShell("Fallback command: " + BuildCommandPreview(codex, fallbackArgs)));
                 var fallbackCommand = "& " + QuotePowerShell(codex);
                 foreach (var arg in fallbackArgs) fallbackCommand += " " + QuotePowerShell(arg);
                 sb.AppendLine("  " + fallbackCommand);
+                sb.AppendLine("  Write-LaunchLog ('Fallback exit: ' + $LASTEXITCODE)");
                 sb.AppendLine("}");
             }
             sb.AppendLine("Write-Host ''");
+            sb.AppendLine("Write-Host ('诊断日志: ' + $LaunchLog)");
+            sb.AppendLine("Write-LaunchLog 'Done.'");
             sb.AppendLine("Write-Host 'Codex 已退出，窗口保持打开以便查看输出。'");
             File.WriteAllText(scriptPath, sb.ToString(), new UTF8Encoding(true));
             return scriptPath;
@@ -4861,9 +4940,32 @@ namespace AiSessionManagerPortable
             var needsCall = String.IsNullOrWhiteSpace(extension) ||
                 String.Equals(extension, ".cmd", StringComparison.OrdinalIgnoreCase) ||
                 String.Equals(extension, ".bat", StringComparison.OrdinalIgnoreCase);
-            var command = (needsCall ? "call " : "") + QuoteCmdArg(codex);
+            var command = (needsCall ? "call " : "") + (LooksLikePath(codex) ? QuoteCmdArg(codex) : EscapeBareCmdToken(codex));
             foreach (var arg in args) command += " " + QuoteCmdArg(arg);
             return command;
+        }
+
+        private static bool LooksLikePath(string value)
+        {
+            if (String.IsNullOrWhiteSpace(value)) return false;
+            return value.IndexOf('\\') >= 0 ||
+                value.IndexOf('/') >= 0 ||
+                value.IndexOf(':') >= 0 ||
+                value.IndexOf(' ') >= 0;
+        }
+
+        private static string EscapeBareCmdToken(string value)
+        {
+            value = String.IsNullOrWhiteSpace(value) ? "codex" : value.Trim();
+            return value
+                .Replace("^", "^^")
+                .Replace("&", "^&")
+                .Replace("|", "^|")
+                .Replace("<", "^<")
+                .Replace(">", "^>")
+                .Replace("(", "^(")
+                .Replace(")", "^)")
+                .Replace("%", "%%");
         }
 
         private static string BuildCommandPreview(string codex, List<string> args)
@@ -4886,7 +4988,8 @@ namespace AiSessionManagerPortable
                 .Replace("&", "^&")
                 .Replace("|", "^|")
                 .Replace("<", "^<")
-                .Replace(">", "^>");
+                .Replace(">", "^>")
+                .Replace("%", "%%");
         }
 
         private void CleanInvalidCodexServiceTier()
@@ -4947,7 +5050,7 @@ namespace AiSessionManagerPortable
 
         private void RunPowerShellScript(string script, string args)
         {
-            var output = RunProcess("powershell.exe", "-NoProfile -ExecutionPolicy Bypass -File " + QuoteArg(script) + " " + args, _rootDir, 120000);
+            var output = RunProcess("powershell.exe", "-NoProfile -ExecutionPolicy RemoteSigned -File " + QuoteArg(script) + " " + args, _rootDir, 120000);
             if (output.ExitCode != 0) throw new InvalidOperationException(output.Output);
         }
 

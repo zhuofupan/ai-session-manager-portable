@@ -286,6 +286,18 @@ GUI 里的 `弹窗提醒` 默认用于本地提醒。启用后，工具会：
 
 如果 GUI 看不到 cc-switch 供应商，点击 `加载cc-switch.db文件`，选择 `cc-switch.db` 或同结构 `.db` 文件。
 
+如果点击 `启动终端` 后 CMD 窗口没有继续启动 Codex，请让用户把下面三个文件发给你：
+
+```text
+%APPDATA%\ai-session-manager-portable\launch-codex.log
+%APPDATA%\ai-session-manager-portable\launch-codex.cmd
+%APPDATA%\ai-session-manager-portable\wpf-diagnostic.log
+```
+
+如果 PowerShell 能启动但 CMD 没反应，优先查看 `launch-codex.log` 里的 `Resolved codex`、`where codex`、`cd exit` 和 `Main exit`。
+
+如果杀毒软件提示风险，通常是未签名的小众工具、会启动 PowerShell/CMD、并包含本地脚本启动器造成的启发式误报。建议发布时使用 GitHub Releases 的源码和 exe 一起分发，提供 SHA256，避免压缩壳/混淆；正式分发前最好做代码签名。项目已尽量避免 `ExecutionPolicy Bypass` 这类高风险启动参数，但无法替代厂商白名单或代码签名。
+
 ## 开发说明
 
 主 GUI 已迁移到 C#/.NET WPF，使用 `tools\build-exe.ps1` 编译为 `ai-session-manager-portable.exe`。真正的历史写入逻辑仍统一交给 PowerShell CLI 脚本，这样 WPF GUI 和命令行行为保持一致。
@@ -293,7 +305,7 @@ GUI 里的 `弹窗提醒` 默认用于本地提醒。启用后，工具会：
 重新构建：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\build-exe.ps1
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File tools\build-exe.ps1
 ```
 
 发布前建议检查：
