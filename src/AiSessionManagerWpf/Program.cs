@@ -24,7 +24,7 @@ namespace AiSessionManagerPortable
 {
     public static class Program
     {
-        public const string AppVersion = "2026.06.21.02";
+        public const string AppVersion = "2026.06.21.03";
         public const string AppAuthor = "Joff Pan";
         public const string GitHubUrl = "https://github.com/zhuofupan/ai-session-manager-portable";
 
@@ -235,6 +235,7 @@ namespace AiSessionManagerPortable
         private TextBox _fontSizeBox;
         private RichTextBox _detailBox;
         private StackPanel _detailNav;
+        private Border _detailNavHitBox;
         private Grid _detailHost;
         private Popup _detailNavPopup;
         private CheckBox _includeArchivedBox;
@@ -251,6 +252,7 @@ namespace AiSessionManagerPortable
         private Button _nextButton;
         private SessionRow _detailRow;
         private readonly List<DetailNavItem> _detailNavTargets = new List<DetailNavItem>();
+        private readonly List<int> _detailNavVisibleIndexes = new List<int>();
         private const int MaxDetailNavigationButtons = 20;
         private const int InitialSessionLoadLimit = 60;
         private const int SessionLoadChunkSize = 120;
@@ -713,6 +715,8 @@ namespace AiSessionManagerPortable
             optionActions.Children.Add(_usePowerShellBox);
             var launchButton = MakeCommandButton("\uE756", "启动终端", true, delegate { LaunchTerminal(); });
             launchButton.Margin = new Thickness(0, -2, 5, 0);
+            launchButton.MinWidth = 88;
+            launchButton.Padding = new Thickness(12, 7, 12, 7);
             optionActions.Children.Add(launchButton);
 
             var rowEndGroup = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(16, 0, 0, 0) };
@@ -756,19 +760,31 @@ namespace AiSessionManagerPortable
             };
             _detailBox.Document = CreateDetailDocument();
             detailHost.Children.Add(_detailBox);
+            _detailNavHitBox = new Border
+            {
+                Width = 46,
+                Padding = new Thickness(8, 14, 8, 14),
+                Background = Brushes.Transparent,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 8, 0)
+            };
+            _detailNavHitBox.MouseEnter += delegate { _detailNavPreviewHideToken++; };
+            _detailNavHitBox.MouseMove += delegate(object sender, MouseEventArgs e) { ShowNavigationPreviewFromPointer(e); };
+            _detailNavHitBox.MouseLeave += delegate { ScheduleNavigationPreviewHide(); };
             _detailNav = new StackPanel
             {
                 Orientation = Orientation.Vertical,
-                HorizontalAlignment = HorizontalAlignment.Right,
+                HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 23, 0),
+                Margin = new Thickness(0),
                 Width = 30,
                 Background = Brushes.Transparent
             };
             _detailNav.MouseEnter += delegate { _detailNavPreviewHideToken++; };
-            _detailNav.MouseLeave += delegate { ScheduleNavigationPreviewHide(); };
-            Panel.SetZIndex(_detailNav, 2);
-            detailHost.Children.Add(_detailNav);
+            _detailNavHitBox.Child = _detailNav;
+            Panel.SetZIndex(_detailNavHitBox, 2);
+            detailHost.Children.Add(_detailNavHitBox);
             _detailNavPopup = new Popup
             {
                 Placement = PlacementMode.Relative,
@@ -1380,18 +1396,48 @@ namespace AiSessionManagerPortable
 
         private Button MakeLinkButton(string text, RoutedEventHandler handler)
         {
+            var label = new TextBlock
+            {
+                Text = text,
+                Foreground = PrimaryBrush(),
+                FontWeight = FontWeights.SemiBold,
+                TextDecorations = null
+            };
             var b = new Button
             {
-                Content = text,
-                Padding = new Thickness(0),
+                Content = label,
+                Padding = new Thickness(2, 1, 2, 1),
                 BorderThickness = new Thickness(0),
                 Background = Brushes.Transparent,
-                Foreground = PrimaryBrush(),
                 Cursor = Cursors.Hand,
                 VerticalAlignment = VerticalAlignment.Center,
-                FontWeight = FontWeights.SemiBold
+                FocusVisualStyle = null
             };
-            b.Click += handler;
+            var template = new ControlTemplate(typeof(Button));
+            var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
+            presenter.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            presenter.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            template.VisualTree = presenter;
+            b.Template = template;
+            b.MouseEnter += delegate
+            {
+                label.Foreground = AccentBrush();
+                label.TextDecorations = TextDecorations.Underline;
+            };
+            b.MouseLeave += delegate
+            {
+                label.Foreground = PrimaryBrush();
+                label.TextDecorations = null;
+            };
+            b.Click += delegate(object sender, RoutedEventArgs e)
+            {
+                try { handler(sender, e); }
+                catch (Exception ex)
+                {
+                    SetStatus("打开链接失败：" + ex.Message);
+                    System.Windows.MessageBox.Show(ex.Message, "打开链接失败", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+            };
             return b;
         }
 
@@ -3366,11 +3412,13 @@ namespace AiSessionManagerPortable
             _activeDetailNavPreviewSignature = "";
             _detailNavPreviewHideToken++;
             _detailNav.Children.Clear();
+            _detailNavVisibleIndexes.Clear();
             var count = _detailNavTargets.Count;
             WriteDiagnostic("UpdateDetailNavigation targets=" + count + ".");
             if (count <= 1) return;
 
             var indexes = BuildNavigationIndexes(count, MaxDetailNavigationButtons);
+            _detailNavVisibleIndexes.AddRange(indexes);
             foreach (var index in indexes)
             {
                 var item = _detailNavTargets[index];
@@ -3418,10 +3466,22 @@ namespace AiSessionManagerPortable
                 Cursor = Cursors.Hand
             };
             b.MouseEnter += delegate { ShowNavigationPreviewPopup(b, activeIndex, visibleIndexes); };
-            b.MouseLeave += delegate { ScheduleNavigationPreviewHide(); };
             ApplyDetailNavigationButtonChrome(b);
             AttachClickFeedback(b, "", handler);
             return b;
+        }
+
+        private void ShowNavigationPreviewFromPointer(MouseEventArgs e)
+        {
+            if (_detailNav == null || _detailNavVisibleIndexes.Count == 0) return;
+            var navHeight = _detailNav.ActualHeight;
+            if (navHeight <= 0) return;
+            var position = e.GetPosition(_detailNav);
+            var slotHeight = Math.Max(1.0, navHeight / Math.Max(1, _detailNavVisibleIndexes.Count));
+            var y = Math.Max(0, Math.Min(navHeight - 0.1, position.Y));
+            var slot = Math.Max(0, Math.Min(_detailNavVisibleIndexes.Count - 1, (int)Math.Floor(y / slotHeight)));
+            var activeIndex = _detailNavVisibleIndexes[slot];
+            ShowNavigationPreviewPopup(_detailNavHitBox ?? (UIElement)_detailNav, activeIndex, _detailNavVisibleIndexes);
         }
 
         private void ApplyDetailNavigationButtonChrome(Button button)
@@ -3495,7 +3555,9 @@ namespace AiSessionManagerPortable
                 if (host != null && host.ActualWidth > 0 && host.ActualHeight > 0)
                 {
                     var hostTopLeft = ToDeviceIndependentScreenPoint(host.PointToScreen(new Point(0, 0)));
-                    var rightMargin = _detailNav == null ? 23.0 : _detailNav.Margin.Right;
+                    var rightMargin = 23.0;
+                    if (_detailNavHitBox != null) rightMargin = _detailNavHitBox.Margin.Right + _detailNavHitBox.Padding.Right;
+                    else if (_detailNav != null) rightMargin = _detailNav.Margin.Right;
                     var navWidth = Math.Max(18.0, nav.ActualWidth);
                     navTopLeft = new Point(hostTopLeft.X + host.ActualWidth - rightMargin - navWidth, hostTopLeft.Y + (host.ActualHeight - navHeight) / 2.0);
                     anchorCenterY = hostTopLeft.Y + host.ActualHeight / 2.0;
@@ -3939,9 +4001,9 @@ namespace AiSessionManagerPortable
                 System.Windows.MessageBox.Show("请选择目标账号。", "目标账号不完整", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
+            var options = BuildDeriveOptions(target);
             await RunBusyAsync("正在派生 " + rows.Count + " 条会话...", delegate
             {
-                var options = BuildDeriveOptions(target);
                 foreach (var row in rows)
                     RunPowerShellScript(_cliScriptPath, "clone -Id " + QuoteArg(row.Id) + " -To " + QuoteArg(target) + options);
             });
@@ -3957,7 +4019,8 @@ namespace AiSessionManagerPortable
                 System.Windows.MessageBox.Show("派生全部需要选择明确的源账号和目标账号。", "账号不完整", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
-            await RunBusyAsync("正在派生全部...", delegate { RunPowerShellScript(_cliScriptPath, "sync -From " + QuoteArg(source) + " -To " + QuoteArg(target) + BuildDeriveOptions(target)); });
+            var options = BuildDeriveOptions(target);
+            await RunBusyAsync("正在派生全部...", delegate { RunPowerShellScript(_cliScriptPath, "sync -From " + QuoteArg(source) + " -To " + QuoteArg(target) + options); });
             RefreshAll();
         }
 
@@ -3970,7 +4033,8 @@ namespace AiSessionManagerPortable
                 System.Windows.MessageBox.Show("双向派生需要选择两个明确账号。", "账号不完整", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
-            await RunBusyAsync("正在双向派生...", delegate { RunPowerShellScript(_cliScriptPath, "mirror -Providers " + QuoteArg(source + "," + target) + BuildDeriveOptions(target)); });
+            var options = BuildDeriveOptions(target);
+            await RunBusyAsync("正在双向派生...", delegate { RunPowerShellScript(_cliScriptPath, "mirror -Providers " + QuoteArg(source + "," + target) + options); });
             RefreshAll();
         }
 
@@ -4501,6 +4565,11 @@ namespace AiSessionManagerPortable
         private void OpenPath(string path)
         {
             if (String.IsNullOrWhiteSpace(path)) return;
+            if (Regex.IsMatch(path, "^https?://", RegexOptions.IgnoreCase))
+            {
+                Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+                return;
+            }
             if (File.Exists(path) || Directory.Exists(path)) Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
         }
 
