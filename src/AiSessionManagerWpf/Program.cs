@@ -24,7 +24,7 @@ namespace AiSessionManagerPortable
 {
     public static class Program
     {
-        public const string AppVersion = "2026.06.21.07";
+        public const string AppVersion = "2026.06.21.10";
         public const string AppAuthor = "Joff Pan";
         public const string GitHubUrl = "https://github.com/zhuofupan/ai-session-manager-portable";
 
@@ -3648,10 +3648,11 @@ namespace AiSessionManagerPortable
             panel.MouseEnter += delegate { _detailNavPreviewHideToken++; };
             panel.MouseLeave += delegate { ScheduleNavigationPreviewHide(); };
             _detailNavPopup.Child = panel;
-            _detailNavPopup.Placement = PlacementMode.Relative;
-            _detailNavPopup.PlacementTarget = (_detailNavHitBox as UIElement) ?? (_detailNav as UIElement) ?? target;
-            _detailNavPopup.HorizontalOffset = -(DetailNavigationPreviewWidth + DetailNavigationPreviewGap);
-            _detailNavPopup.VerticalOffset = CalculateNavigationPreviewVerticalOffset(panel);
+            _detailNavPopup.Placement = PlacementMode.AbsolutePoint;
+            _detailNavPopup.PlacementTarget = null;
+            var location = CalculateNavigationPreviewScreenLocation(panel);
+            _detailNavPopup.HorizontalOffset = location.X;
+            _detailNavPopup.VerticalOffset = location.Y;
             _detailNavPopup.IsOpen = true;
         }
 
@@ -3745,6 +3746,56 @@ namespace AiSessionManagerPortable
             }
             catch { }
             return screenPoint;
+        }
+
+        private Point CalculateNavigationPreviewScreenLocation(FrameworkElement panel)
+        {
+            try
+            {
+                var target = (_detailNavHitBox as FrameworkElement) ?? (_detailNav as FrameworkElement);
+                if (target == null) return new Point(0, 0);
+                target.UpdateLayout();
+                var popupHeight = MeasureElementHeight(panel, DetailNavigationPreviewWidth, 120.0);
+                var targetHeight = Math.Max(1.0, target.ActualHeight);
+                var targetWidth = Math.Max(1.0, target.ActualWidth);
+                var targetTopLeft = ToDeviceIndependentScreenPoint(target.PointToScreen(new Point(0, 0)));
+                var anchorLeft = targetTopLeft.X;
+                var host = _detailHost as FrameworkElement;
+                if (host != null && host.ActualWidth > targetWidth + 1)
+                {
+                    host.UpdateLayout();
+                    var hostTopLeft = ToDeviceIndependentScreenPoint(host.PointToScreen(new Point(0, 0)));
+                    var rightMargin = _detailNavHitBox == null ? 8.0 : _detailNavHitBox.Margin.Right;
+                    anchorLeft = hostTopLeft.X + host.ActualWidth - rightMargin - targetWidth;
+                }
+                var x = anchorLeft - DetailNavigationPreviewGap;
+                var y = targetTopLeft.Y + (targetHeight - popupHeight) / 2.0;
+
+                var minX = SystemParameters.VirtualScreenLeft;
+                var minY = SystemParameters.VirtualScreenTop;
+                var maxX = minX + SystemParameters.VirtualScreenWidth;
+                var maxY = minY + SystemParameters.VirtualScreenHeight - popupHeight;
+                if (maxX >= minX + DetailNavigationPreviewWidth) x = Math.Max(minX + DetailNavigationPreviewWidth, Math.Min(maxX, x));
+                else x = Math.Max(minX, x);
+                if (maxY >= minY) y = Math.Max(minY, Math.Min(maxY, y));
+                else y = Math.Max(minY, y);
+
+                var result = new Point(Math.Round(x), Math.Round(y));
+                WriteDiagnostic("NavPreview placement mode=AbsoluteHitBox targetScreen=" +
+                    Math.Round(targetTopLeft.X) + "," + Math.Round(targetTopLeft.Y) +
+                    " anchorLeft=" + Math.Round(anchorLeft) +
+                    " targetSize=" + Math.Round(targetWidth) + "x" + Math.Round(targetHeight) +
+                    " popupWidth=" + DetailNavigationPreviewWidth +
+                    " popupHeight=" + Math.Round(popupHeight) +
+                    " desiredRight=" + Math.Round(anchorLeft - DetailNavigationPreviewGap) +
+                    " final=" + result.X + "," + result.Y + ".");
+                return result;
+            }
+            catch (Exception ex)
+            {
+                WriteDiagnostic("NavPreview absolute placement failed: " + ex.GetType().Name + ": " + ex.Message);
+                return new Point(0, 0);
+            }
         }
 
         private double CalculateNavigationPreviewVerticalOffset(FrameworkElement panel)
