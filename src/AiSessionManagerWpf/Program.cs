@@ -24,7 +24,7 @@ namespace AiSessionManagerPortable
 {
     public static class Program
     {
-        public const string AppVersion = "2026.06.21.01";
+        public const string AppVersion = "2026.06.21.02";
         public const string AppAuthor = "Joff Pan";
         public const string GitHubUrl = "https://github.com/zhuofupan/ai-session-manager-portable";
 
@@ -258,6 +258,9 @@ namespace AiSessionManagerPortable
         private const double DetailNavigationPreviewWidth = 320.0;
         private const double DetailNavigationPreviewGap = 10.0;
         private int _refreshGeneration = 0;
+        private int _detailNavPreviewHideToken = 0;
+        private int _activeDetailNavPreviewIndex = -1;
+        private string _activeDetailNavPreviewSignature = "";
         private bool _fullRowsLoading = false;
 
         private readonly JavaScriptSerializer _json = new JavaScriptSerializer { MaxJsonLength = Int32.MaxValue, RecursionLimit = 100 };
@@ -758,8 +761,12 @@ namespace AiSessionManagerPortable
                 Orientation = Orientation.Vertical,
                 HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 23, 0)
+                Margin = new Thickness(0, 0, 23, 0),
+                Width = 30,
+                Background = Brushes.Transparent
             };
+            _detailNav.MouseEnter += delegate { _detailNavPreviewHideToken++; };
+            _detailNav.MouseLeave += delegate { ScheduleNavigationPreviewHide(); };
             Panel.SetZIndex(_detailNav, 2);
             detailHost.Children.Add(_detailNav);
             _detailNavPopup = new Popup
@@ -3354,6 +3361,10 @@ namespace AiSessionManagerPortable
         private void UpdateDetailNavigation()
         {
             if (_detailNav == null) return;
+            if (_detailNavPopup != null) _detailNavPopup.IsOpen = false;
+            _activeDetailNavPreviewIndex = -1;
+            _activeDetailNavPreviewSignature = "";
+            _detailNavPreviewHideToken++;
             _detailNav.Children.Clear();
             var count = _detailNavTargets.Count;
             WriteDiagnostic("UpdateDetailNavigation targets=" + count + ".");
@@ -3397,9 +3408,9 @@ namespace AiSessionManagerPortable
             var b = new Button
             {
                 Content = "",
-                Width = 18,
-                Height = 8,
-                Margin = new Thickness(0, 1, 0, 1),
+                Width = 30,
+                Height = 14,
+                Margin = new Thickness(0),
                 Padding = new Thickness(0),
                 Background = Brushes.Transparent,
                 BorderBrush = SteelBrush(),
@@ -3440,8 +3451,18 @@ namespace AiSessionManagerPortable
         private void ShowNavigationPreviewPopup(UIElement target, int activeIndex, List<int> visibleIndexes)
         {
             if (_detailNavPopup == null) return;
+            _detailNavPreviewHideToken++;
+            var signature = BuildNavigationPreviewSignature(visibleIndexes);
+            if (_detailNavPopup.IsOpen &&
+                _activeDetailNavPreviewIndex == activeIndex &&
+                String.Equals(_activeDetailNavPreviewSignature, signature, StringComparison.Ordinal))
+            {
+                return;
+            }
+            _activeDetailNavPreviewIndex = activeIndex;
+            _activeDetailNavPreviewSignature = signature;
             var panel = BuildNavigationPreviewPanel(activeIndex, visibleIndexes);
-            panel.MouseEnter += delegate { };
+            panel.MouseEnter += delegate { _detailNavPreviewHideToken++; };
             panel.MouseLeave += delegate { ScheduleNavigationPreviewHide(); };
             _detailNavPopup.Child = panel;
             _detailNavPopup.Placement = PlacementMode.AbsolutePoint;
@@ -3450,6 +3471,12 @@ namespace AiSessionManagerPortable
             _detailNavPopup.HorizontalOffset = location.X;
             _detailNavPopup.VerticalOffset = location.Y;
             _detailNavPopup.IsOpen = true;
+        }
+
+        private static string BuildNavigationPreviewSignature(List<int> visibleIndexes)
+        {
+            if (visibleIndexes == null || visibleIndexes.Count == 0) return "";
+            return String.Join(",", visibleIndexes.Select(i => i.ToString()).ToArray());
         }
 
         private Point CalculateFixedNavigationPopupScreenLocation(UIElement fallbackTarget, FrameworkElement panel, int activeIndex)
@@ -3544,12 +3571,20 @@ namespace AiSessionManagerPortable
 
         private async void ScheduleNavigationPreviewHide()
         {
-            await Task.Delay(160);
+            var token = ++_detailNavPreviewHideToken;
+            await Task.Delay(260);
+            if (token != _detailNavPreviewHideToken) return;
             if (_detailNavPopup == null || !_detailNavPopup.IsOpen) return;
             var child = _detailNavPopup.Child as UIElement;
             var overPopup = child != null && child.IsMouseOver;
             var overNav = _detailNav != null && _detailNav.IsMouseOver;
-            if (!overPopup && !overNav) _detailNavPopup.IsOpen = false;
+            if (!overPopup && !overNav)
+            {
+                _detailNavPopup.IsOpen = false;
+                _activeDetailNavPreviewIndex = -1;
+                _activeDetailNavPreviewSignature = "";
+                WriteDiagnostic("NavPreview hidden token=" + token + ".");
+            }
         }
 
         private Border BuildNavigationPreviewPanel(int activeIndex, List<int> visibleIndexes)
@@ -3585,6 +3620,9 @@ namespace AiSessionManagerPortable
                         if (_detailBox != null) _detailBox.Focus();
                     }
                     if (_detailNavPopup != null) _detailNavPopup.IsOpen = false;
+                    _activeDetailNavPreviewIndex = -1;
+                    _activeDetailNavPreviewSignature = "";
+                    _detailNavPreviewHideToken++;
                 };
                 var item = new Border
                 {
