@@ -26,14 +26,14 @@ using System.Windows.Media.Imaging;
 [assembly: AssemblyCompany("Joff Pan")]
 [assembly: AssemblyProduct("AI Session Manager Portable")]
 [assembly: AssemblyCopyright("Copyright (c) Joff Pan")]
-[assembly: AssemblyVersion("2026.6.21.14")]
-[assembly: AssemblyFileVersion("2026.6.21.14")]
+[assembly: AssemblyVersion("2026.6.21.16")]
+[assembly: AssemblyFileVersion("2026.6.21.16")]
 
 namespace AiSessionManagerPortable
 {
     public static class Program
     {
-        public const string AppVersion = "2026.06.21.14";
+        public const string AppVersion = "2026.06.21.16";
         public const string AppAuthor = "Joff Pan";
         public const string GitHubUrl = "https://github.com/zhuofupan/ai-session-manager-portable";
 
@@ -758,8 +758,18 @@ namespace AiSessionManagerPortable
             _fullAccessBox.Unchecked += delegate { if (_suppressUiEvents) return; SaveConfigWithDetectedInfo(false); };
             _usePowerShellBox.Checked += delegate { if (_suppressUiEvents) return; SaveConfigWithDetectedInfo(false); };
             _usePowerShellBox.Unchecked += delegate { if (_suppressUiEvents) return; SaveConfigWithDetectedInfo(false); };
-            _turnPopupBox.Checked += delegate { if (_suppressUiEvents) return; SaveConfigWithDetectedInfo(false); };
-            _turnPopupBox.Unchecked += delegate { if (_suppressUiEvents) return; SaveConfigWithDetectedInfo(false); };
+            _turnPopupBox.Checked += delegate
+            {
+                if (_suppressUiEvents) return;
+                SaveConfigWithDetectedInfo(false);
+                EnsureTurnCompletePopup(GetCodexHome());
+            };
+            _turnPopupBox.Unchecked += delegate
+            {
+                if (_suppressUiEvents) return;
+                SaveConfigWithDetectedInfo(false);
+                DisableTurnCompletePopup(GetCodexHome());
+            };
             optionActions.Children.Add(_loadChatBox);
             optionActions.Children.Add(_fastBox);
             optionActions.Children.Add(_fullAccessBox);
@@ -2089,6 +2099,7 @@ namespace AiSessionManagerPortable
                 stage.Restart();
                 SaveConfigWithDetectedInfo(true);
                 WriteDiagnostic("RefreshAll save config stageMs=" + stage.ElapsedMilliseconds + ".");
+                if (IsTurnCompletePopupEnabled()) EnsureTurnCompletePopup(CurrentCodexHome());
                 var loadingMore = snapshot.ThreadRows != null && snapshot.ThreadRows.Count >= InitialSessionLoadLimit;
                 SetStatus(loadingMore
                     ? "已加载最近 " + _allRows.Count + " 条会话，正在后台补全..."
@@ -2173,6 +2184,7 @@ namespace AiSessionManagerPortable
                     if (!String.IsNullOrWhiteSpace(selectedId)) SelectSessionById(selectedId);
                     WriteDiagnostic("Lazy session final render added=" + totalAdded + " stageMs=" + renderSw.ElapsedMilliseconds + " filtered=" + _filteredRows.Count + " pageRows=" + _pageRows.Count + ".");
                 }
+                if (generation == _refreshGeneration && IsTurnCompletePopupEnabled()) EnsureTurnCompletePopup(CurrentCodexHome());
                 SetStatus("已补全。本地 Codex 会话 " + _allRows.Count + " 条，cc-switch 节点 " + _ccSwitchNodes.Count + " 个。");
                 WriteDiagnostic("Lazy session load completed rows=" + _allRows.Count + ".");
             }
@@ -4721,6 +4733,7 @@ namespace AiSessionManagerPortable
             }
             SaveConfigWithDetectedInfo(false);
             CleanInvalidCodexServiceTier();
+            if (_turnPopupBox != null && _turnPopupBox.IsChecked == true) EnsureTurnCompletePopup(codexHome);
             var launchEnvironment = BuildLaunchEnvironment(launchNode);
             var launchProviderInfo = BuildLaunchProviderInfo(launchNode);
             var launchLogPath = GetLaunchLogPath();
@@ -4905,6 +4918,337 @@ namespace AiSessionManagerPortable
                 catch { }
             }
             return bestPath;
+        }
+
+        private void EnsureTurnCompletePopup(string codexHome)
+        {
+            try
+            {
+                var notifyVbs = Path.Combine(_rootDir, "tools", "ai-session-turn-ended-notify.vbs");
+                var notifyPs1 = Path.Combine(_rootDir, "tools", "ai-session-turn-ended-notify.ps1");
+                var monitorVbs = Path.Combine(_rootDir, "tools", "ai-session-turn-complete-monitor.vbs");
+                if (!File.Exists(notifyVbs) || !File.Exists(notifyPs1) || !File.Exists(monitorVbs))
+                {
+                    WriteDiagnostic("TurnCompletePopup skipped: notifier or monitor script missing.");
+                    return;
+                }
+
+                var homes = GetCodexHomesForMonitoring(codexHome);
+                if (homes.Count == 0)
+                {
+                    WriteDiagnostic("TurnCompletePopup skipped: no CodexHome candidates.");
+                    return;
+                }
+
+                foreach (var home in homes)
+                {
+                    EnsureCodexNotifyHook(home, notifyVbs);
+                    StartTurnCompleteMonitor(home, monitorVbs, notifyVbs, notifyPs1);
+                }
+                WriteDiagnostic("TurnCompletePopup enabled homes=" + homes.Count + ".");
+            }
+            catch (Exception ex)
+            {
+                WriteDiagnostic("TurnCompletePopup setup failed: " + ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+
+        private bool IsTurnCompletePopupEnabled()
+        {
+            return _turnPopupBox == null ? _config.TurnCompletePopup : _turnPopupBox.IsChecked == true;
+        }
+
+        private string CurrentCodexHome()
+        {
+            try
+            {
+                if (!String.IsNullOrWhiteSpace(_stateDb) && File.Exists(_stateDb))
+                    return Path.GetDirectoryName(_stateDb);
+            }
+            catch { }
+            return GetCodexHome();
+        }
+
+        private void DisableTurnCompletePopup(string codexHome)
+        {
+            try
+            {
+                var notifyVbs = Path.Combine(_rootDir, "tools", "ai-session-turn-ended-notify.vbs");
+                var homes = GetCodexHomesForMonitoring(codexHome);
+                foreach (var home in homes)
+                {
+                    DisableTurnCompletePopupForHome(home, notifyVbs);
+                    RequestTurnCompleteMonitorStop(home);
+                }
+                WriteDiagnostic("TurnCompletePopup disabled homes=" + homes.Count + ".");
+            }
+            catch (Exception ex)
+            {
+                WriteDiagnostic("TurnCompletePopup disable failed: " + ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+
+        private void DisableTurnCompletePopupForHome(string codexHome, string notifyVbs)
+        {
+            var configPath = Path.Combine(codexHome, "config.toml");
+            if (!File.Exists(configPath)) return;
+
+            var text = File.ReadAllText(configPath, Encoding.UTF8);
+            var currentNotify = ParseTomlStringArrayValue(text, "notify");
+            if (!IsAiSessionNotifyCommand(currentNotify, notifyVbs)) return;
+
+            var forward = GetForwardedNotifyCommand(currentNotify);
+            var updated = forward.Count > 0
+                ? SetTomlStringArrayValue(text, "notify", forward)
+                : RemoveTomlArrayValue(text, "notify");
+            File.WriteAllText(configPath, updated, new UTF8Encoding(false));
+            WriteDiagnostic("TurnCompletePopup notify hook disabled home='" + codexHome + "' restoredForward=" + (forward.Count > 0).ToString() + ".");
+        }
+
+        private void EnsureCodexNotifyHook(string codexHome, string notifyVbs)
+        {
+            var configPath = Path.Combine(codexHome, "config.toml");
+            var text = File.Exists(configPath) ? File.ReadAllText(configPath, Encoding.UTF8) : "";
+            var currentNotify = ParseTomlStringArrayValue(text, "notify");
+            if (IsAiSessionNotifyCommand(currentNotify, notifyVbs))
+            {
+                WriteDiagnostic("TurnCompletePopup notify hook already configured.");
+                return;
+            }
+
+            var values = new List<string>();
+            values.Add("wscript.exe");
+            values.Add(notifyVbs);
+            if (currentNotify.Count > 0)
+            {
+                var forwardJson = _json.Serialize(currentNotify.ToArray());
+                var forwardBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(forwardJson));
+                values.Add("-ForwardBase64");
+                values.Add(forwardBase64);
+            }
+
+            var updated = SetTomlStringArrayValue(text, "notify", values);
+            File.WriteAllText(configPath, updated, new UTF8Encoding(false));
+            WriteDiagnostic("TurnCompletePopup notify hook configured path='" + notifyVbs + "' forward=" + (currentNotify.Count > 0).ToString() + ".");
+        }
+
+        private void StartTurnCompleteMonitor(string codexHome, string monitorVbs, string notifyVbs, string notifyPs1)
+        {
+            try
+            {
+                ClearTurnCompleteMonitorStop(codexHome);
+                var args = new List<string>();
+                args.Add(monitorVbs);
+                args.Add("-CodexHome");
+                args.Add(codexHome);
+                args.Add("-NotifierLauncherPath");
+                args.Add(notifyVbs);
+                args.Add("-NotifierPath");
+                args.Add(notifyPs1);
+
+                var psi = new ProcessStartInfo("wscript.exe", String.Join(" ", args.Select(QuoteArg).ToArray()))
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                Process.Start(psi);
+                WriteDiagnostic("TurnCompletePopup monitor launched codexHome='" + codexHome + "'.");
+            }
+            catch (Exception ex)
+            {
+                WriteDiagnostic("TurnCompletePopup monitor launch failed: " + ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+
+        private List<string> GetCodexHomesForMonitoring(string preferredCodexHome)
+        {
+            var homes = new List<string>();
+            AddCodexHomeForMonitoring(homes, preferredCodexHome);
+            AddCodexHomeForMonitoring(homes, CurrentCodexHome());
+            AddCodexHomeForMonitoring(homes, _config.CodexHome);
+            AddCodexHomeForMonitoring(homes, Environment.GetEnvironmentVariable("CODEX_HOME"));
+            AddCodexHomeForMonitoring(homes, Environment.GetEnvironmentVariable("HOME") == null ? "" : Path.Combine(Environment.GetEnvironmentVariable("HOME"), ".codex"));
+            AddCodexHomeForMonitoring(homes, Environment.GetEnvironmentVariable("USERPROFILE") == null ? "" : Path.Combine(Environment.GetEnvironmentVariable("USERPROFILE"), ".codex"));
+            AddCodexHomeForMonitoring(homes, Path.Combine(_rootDir, ".codex"));
+            var parent = Directory.GetParent(_rootDir);
+            if (parent != null) AddCodexHomeForMonitoring(homes, Path.Combine(parent.FullName, ".codex"));
+            foreach (var row in _allRows)
+            {
+                AddCodexHomeForMonitoring(homes, TryGetCodexHomeFromPath(row.FilePath));
+            }
+            return homes;
+        }
+
+        private static void AddCodexHomeForMonitoring(List<string> homes, string candidate)
+        {
+            if (homes == null || String.IsNullOrWhiteSpace(candidate)) return;
+            try
+            {
+                var resolved = ResolveCodexHomeFromSelectionFast(candidate);
+                if (String.IsNullOrWhiteSpace(resolved)) return;
+                if (!Directory.Exists(Path.Combine(resolved, "sessions"))) return;
+                if (!File.Exists(Path.Combine(resolved, "state_5.sqlite"))) return;
+                resolved = NormalizePath(resolved);
+                if (!homes.Any(h => String.Equals(h, resolved, StringComparison.OrdinalIgnoreCase)))
+                    homes.Add(resolved);
+            }
+            catch { }
+        }
+
+        private void RequestTurnCompleteMonitorStop(string codexHome)
+        {
+            try
+            {
+                var stopFile = GetTurnCompleteMonitorStopFile(codexHome);
+                if (String.IsNullOrWhiteSpace(stopFile)) return;
+                var dir = Path.GetDirectoryName(stopFile);
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                File.WriteAllText(stopFile, DateTimeOffset.Now.ToString("o"), new UTF8Encoding(false));
+            }
+            catch (Exception ex)
+            {
+                WriteDiagnostic("TurnCompletePopup stop signal failed: " + ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+
+        private void ClearTurnCompleteMonitorStop(string codexHome)
+        {
+            try
+            {
+                var stopFile = GetTurnCompleteMonitorStopFile(codexHome);
+                if (!String.IsNullOrWhiteSpace(stopFile) && File.Exists(stopFile))
+                    File.Delete(stopFile);
+            }
+            catch { }
+        }
+
+        private static string GetTurnCompleteMonitorStopFile(string codexHome)
+        {
+            if (String.IsNullOrWhiteSpace(codexHome)) return "";
+            var hash = GetCodexHomeMonitorHash(codexHome);
+            return Path.Combine(GetAppStateDirectory(), "turn-complete-monitor-" + hash + ".stop");
+        }
+
+        private static string GetCodexHomeMonitorHash(string codexHome)
+        {
+            var normalized = NormalizePathForCompare(codexHome).ToLowerInvariant();
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            {
+                var hashBytes = sha.ComputeHash(Encoding.UTF8.GetBytes(normalized));
+                return (BitConverter.ToString(hashBytes).Replace("-", "")).Substring(0, 16);
+            }
+        }
+
+        private static bool IsAiSessionNotifyCommand(List<string> values, string notifyVbs)
+        {
+            if (values == null || values.Count == 0) return false;
+            var expected = NormalizePathForCompare(notifyVbs);
+            foreach (var value in values)
+            {
+                var normalized = NormalizePathForCompare(value);
+                if (String.Equals(normalized, expected, StringComparison.OrdinalIgnoreCase)) return true;
+                if (normalized.EndsWith("\\tools\\ai-session-turn-ended-notify.vbs", StringComparison.OrdinalIgnoreCase)) return true;
+                if (normalized.EndsWith("\\tools\\ai-session-turn-ended-notify.ps1", StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            return false;
+        }
+
+        private List<string> GetForwardedNotifyCommand(List<string> values)
+        {
+            var result = new List<string>();
+            if (values == null) return result;
+            for (var i = 0; i < values.Count - 1; i++)
+            {
+                if (!String.Equals(values[i], "-ForwardBase64", StringComparison.OrdinalIgnoreCase) &&
+                    !String.Equals(values[i], "--ForwardBase64", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                try
+                {
+                    var json = Encoding.UTF8.GetString(Convert.FromBase64String(values[i + 1]));
+                    var items = _json.DeserializeObject(json) as object[];
+                    if (items == null) return result;
+                    foreach (var item in items)
+                    {
+                        if (item != null) result.Add(Convert.ToString(item));
+                    }
+                }
+                catch { }
+                return result;
+            }
+            return result;
+        }
+
+        private static string NormalizePathForCompare(string value)
+        {
+            if (String.IsNullOrWhiteSpace(value)) return "";
+            try { return Path.GetFullPath(value).TrimEnd('\\', '/'); } catch { return value.Trim().TrimEnd('\\', '/'); }
+        }
+
+        private static List<string> ParseTomlStringArrayValue(string text, string name)
+        {
+            var values = new List<string>();
+            if (String.IsNullOrWhiteSpace(text) || String.IsNullOrWhiteSpace(name)) return values;
+            var pattern = "(?ms)^\\s*" + Regex.Escape(name) + "\\s*=\\s*\\[(?<body>.*?)\\]\\s*(?:\\r?\\n|$)";
+            var match = Regex.Match(text, pattern);
+            if (!match.Success) return values;
+
+            foreach (Match item in Regex.Matches(match.Groups["body"].Value, "\"(?<value>(?:\\\\.|[^\"])*)\""))
+            {
+                values.Add(DecodeTomlBasicString(item.Groups["value"].Value));
+            }
+            return values;
+        }
+
+        private static string RemoveTomlArrayValue(string text, string name)
+        {
+            if (text == null) text = "";
+            var pattern = "(?ms)^\\s*" + Regex.Escape(name) + "\\s*=\\s*\\[.*?\\]\\s*(?:\\r?\\n|$)";
+            return Regex.Replace(text, pattern, "");
+        }
+
+        private static string SetTomlStringArrayValue(string text, string name, List<string> values)
+        {
+            if (text == null) text = "";
+            var line = name + " = [ " + String.Join(", ", values.Select(QuoteTomlBasicString).ToArray()) + " ]";
+            var pattern = "(?ms)^\\s*" + Regex.Escape(name) + "\\s*=\\s*\\[.*?\\]\\s*(?:\\r?\\n|$)";
+            if (Regex.IsMatch(text, pattern))
+            {
+                return Regex.Replace(text, pattern, line + Environment.NewLine, RegexOptions.None);
+            }
+            if (text.Length > 0 && !text.EndsWith("\n")) text += Environment.NewLine;
+            return line + Environment.NewLine + text;
+        }
+
+        private static string QuoteTomlBasicString(string value)
+        {
+            if (value == null) value = "";
+            return "\"" + value
+                .Replace("\\", "\\\\")
+                .Replace("\"", "\\\"")
+                .Replace("\r", "\\r")
+                .Replace("\n", "\\n")
+                .Replace("\t", "\\t") + "\"";
+        }
+
+        private static string DecodeTomlBasicString(string value)
+        {
+            if (String.IsNullOrEmpty(value)) return "";
+            var sb = new StringBuilder();
+            for (var i = 0; i < value.Length; i++)
+            {
+                var ch = value[i];
+                if (ch != '\\' || i + 1 >= value.Length)
+                {
+                    sb.Append(ch);
+                    continue;
+                }
+                var next = value[++i];
+                if (next == 'n') sb.Append('\n');
+                else if (next == 'r') sb.Append('\r');
+                else if (next == 't') sb.Append('\t');
+                else sb.Append(next);
+            }
+            return sb.ToString();
         }
 
         private string GetConfiguredCodexCliPath()

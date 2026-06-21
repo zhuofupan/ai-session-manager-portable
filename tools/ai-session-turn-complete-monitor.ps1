@@ -18,12 +18,7 @@ function Write-DiagnosticLog {
     param([AllowNull()][string]$Text)
 
     try {
-        $dir = if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) {
-            Join-Path $env:APPDATA 'ai-session-manager-portable'
-        }
-        else {
-            Join-Path ([System.IO.Path]::GetTempPath()) 'ai-session-manager-portable'
-        }
+        $dir = Get-AppStateDirectory
         if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
             New-Item -ItemType Directory -Path $dir -Force | Out-Null
         }
@@ -34,6 +29,13 @@ function Write-DiagnosticLog {
     catch {
         return
     }
+}
+
+function Get-AppStateDirectory {
+    if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) {
+        return (Join-Path $env:APPDATA 'ai-session-manager-portable')
+    }
+    return (Join-Path ([System.IO.Path]::GetTempPath()) 'ai-session-manager-portable')
 }
 
 function ConvertFrom-Utf8Base64 {
@@ -92,19 +94,29 @@ $script:Contexts = @{}
 $script:SeenTurns = New-Object 'System.Collections.Generic.HashSet[string]'
 $script:PendingApprovals = @{}
 $script:StartupCompletionGraceSeconds = 60
+$script:MonitorHash = ''
+$script:StopFilePath = ''
+
+$sha = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $hashBytes = $sha.ComputeHash($utf8.GetBytes($script:CodexHome.ToLowerInvariant()))
+    $script:MonitorHash = ([BitConverter]::ToString($hashBytes) -replace '-', '').Substring(0, 16)
+}
+finally {
+    $sha.Dispose()
+}
+$script:StopFilePath = Join-Path (Get-AppStateDirectory) "turn-complete-monitor-$script:MonitorHash.stop"
 
 $mutex = $null
 if (-not $SelfTest) {
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    $hashBytes = $sha.ComputeHash($utf8.GetBytes($script:CodexHome.ToLowerInvariant()))
-    $hash = ([BitConverter]::ToString($hashBytes) -replace '-', '').Substring(0, 16)
     $createdNew = $false
-    $mutex = New-Object System.Threading.Mutex($true, "Local\CodexTurnCompleteMonitor_$hash", [ref]$createdNew)
+    $mutex = New-Object System.Threading.Mutex($true, "Local\CodexTurnCompleteMonitor_$script:MonitorHash", [ref]$createdNew)
     if (-not $createdNew) {
         Write-DiagnosticLog "monitor already running for CodexHome='$script:CodexHome'; exiting duplicate."
         return
     }
 
+    Remove-Item -LiteralPath $script:StopFilePath -Force -ErrorAction SilentlyContinue
     Write-DiagnosticLog "monitor started CodexHome='$script:CodexHome' sessions='$script:SessionsDir' pollSeconds=$PollSeconds."
 }
 
@@ -687,6 +699,18 @@ function Check-PendingApprovalPopups {
     }
 }
 
+function Test-MonitorStopRequested {
+    try {
+        if (-not [string]::IsNullOrWhiteSpace($script:StopFilePath) -and
+            (Test-Path -LiteralPath $script:StopFilePath -PathType Leaf)) {
+            Write-DiagnosticLog "monitor stop requested via '$script:StopFilePath'."
+            return $true
+        }
+    }
+    catch { }
+    return $false
+}
+
 function Read-AppendedText {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -891,6 +915,7 @@ try {
     $rescanSeconds = [Math]::Max(30, [Math]::Min(120, [int]$PollSeconds * 30))
     $lastRescanUtc = [DateTime]::UtcNow
     while ($true) {
+        if (Test-MonitorStopRequested) { break }
         if ($watcher) {
             $change = $watcher.WaitForChanged([System.IO.WatcherChangeTypes]::All, $pollMilliseconds)
             if (-not [bool]$change.TimedOut) {
