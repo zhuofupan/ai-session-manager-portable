@@ -26,14 +26,14 @@ using System.Windows.Media.Imaging;
 [assembly: AssemblyCompany("Joff Pan")]
 [assembly: AssemblyProduct("AI Session Manager Portable")]
 [assembly: AssemblyCopyright("Copyright (c) Joff Pan")]
-[assembly: AssemblyVersion("2026.6.21.12")]
-[assembly: AssemblyFileVersion("2026.6.21.12")]
+[assembly: AssemblyVersion("2026.6.21.14")]
+[assembly: AssemblyFileVersion("2026.6.21.14")]
 
 namespace AiSessionManagerPortable
 {
     public static class Program
     {
-        public const string AppVersion = "2026.06.21.12";
+        public const string AppVersion = "2026.06.21.14";
         public const string AppAuthor = "Joff Pan";
         public const string GitHubUrl = "https://github.com/zhuofupan/ai-session-manager-portable";
 
@@ -148,8 +148,10 @@ namespace AiSessionManagerPortable
         public string BaseUrl { get; set; }
         public string WireApi { get; set; }
         public string ProviderName { get; set; }
+        public string ExperimentalBearerToken { get; set; }
         public string AuthMode { get; set; }
         public string ApiKey { get; set; }
+        public bool DisableResponseStorage { get; set; }
         public bool IsCurrent { get; set; }
         public override string ToString()
         {
@@ -2306,10 +2308,13 @@ namespace AiSessionManagerPortable
                         BaseUrl = InferNodeConfigValue(row, "base_url"),
                         WireApi = InferNodeConfigValue(row, "wire_api"),
                         ProviderName = InferNodeConfigValue(row, "name"),
+                        ExperimentalBearerToken = InferNodeConfigValue(row, "experimental_bearer_token"),
                         AuthMode = InferNodeAuthValue(row, "auth_mode"),
                         ApiKey = InferNodeAuthValue(row, "OPENAI_API_KEY"),
+                        DisableResponseStorage = InferNodeConfigBool(row, "disable_response_storage"),
                         IsCurrent = GetBool(row, "is_current", false)
                     };
+                    if (node.IsCurrent) ApplyCurrentCodexConfigToNode(node);
                     nodes.Add(node);
                 }
             }
@@ -2318,6 +2323,30 @@ namespace AiSessionManagerPortable
                 WriteDiagnostic("LoadCcSwitchNodes failed: " + ex.GetType().FullName + ": " + ex.Message);
             }
             return nodes;
+        }
+
+        private void ApplyCurrentCodexConfigToNode(CcSwitchNode node)
+        {
+            if (node == null) return;
+            try
+            {
+                var configPath = Path.Combine(GetCodexHome(), "config.toml");
+                if (!File.Exists(configPath)) return;
+                var config = File.ReadAllText(configPath, Encoding.UTF8);
+                var currentProvider = GetTomlStringValue(config, "model_provider");
+                if (!String.IsNullOrWhiteSpace(currentProvider)) node.ModelProvider = currentProvider;
+                node.BaseUrl = FirstNonEmpty(GetTomlStringValue(config, "base_url"), node.BaseUrl);
+                node.WireApi = FirstNonEmpty(GetTomlStringValue(config, "wire_api"), node.WireApi);
+                node.ProviderName = FirstNonEmpty(GetTomlStringValue(config, "name"), node.ProviderName);
+                node.ExperimentalBearerToken = FirstNonEmpty(GetTomlStringValue(config, "experimental_bearer_token"), node.ExperimentalBearerToken);
+                node.AuthMode = FirstNonEmpty(GetTomlStringValue(config, "preferred_auth_method"), node.AuthMode);
+                node.DisableResponseStorage = GetTomlBoolValue(config, "disable_response_storage", node.DisableResponseStorage);
+                WriteDiagnostic("Current cc-switch node uses Codex config baseUrl='" + node.BaseUrl + "' wireApi='" + node.WireApi + "' proxyToken=" + (!String.IsNullOrWhiteSpace(node.ExperimentalBearerToken)).ToString() + ".");
+            }
+            catch (Exception ex)
+            {
+                WriteDiagnostic("ApplyCurrentCodexConfigToNode failed: " + ex.GetType().Name + ": " + ex.Message);
+            }
         }
 
         private void RefreshCcSwitchHistorySettings()
@@ -2402,12 +2431,33 @@ namespace AiSessionManagerPortable
             catch { return ""; }
         }
 
+        private bool InferNodeConfigBool(Dictionary<string, object> row, string key)
+        {
+            try
+            {
+                var settingsText = GetString(row, "settings_config");
+                var settings = _json.DeserializeObject(settingsText) as Dictionary<string, object>;
+                var config = settings == null ? "" : GetString(settings, "config");
+                return GetTomlBoolValue(config, key, false);
+            }
+            catch { return false; }
+        }
+
         private static string GetTomlStringValue(string text, string name)
         {
             if (String.IsNullOrWhiteSpace(text) || String.IsNullOrWhiteSpace(name)) return "";
             var pattern = "(?m)^\\s*" + Regex.Escape(name) + "\\s*=\\s*\"(?<value>[^\"]*)\"";
             var match = Regex.Match(text, pattern);
             return match.Success ? match.Groups["value"].Value : "";
+        }
+
+        private static bool GetTomlBoolValue(string text, string name, bool fallback)
+        {
+            if (String.IsNullOrWhiteSpace(text) || String.IsNullOrWhiteSpace(name)) return fallback;
+            var pattern = "(?m)^\\s*" + Regex.Escape(name) + "\\s*=\\s*(?<value>true|false)\\s*$";
+            var match = Regex.Match(text, pattern, RegexOptions.IgnoreCase);
+            if (!match.Success) return fallback;
+            return String.Equals(match.Groups["value"].Value, "true", StringComparison.OrdinalIgnoreCase);
         }
 
         private string SelectedCcSwitchNodeKey()
@@ -2937,18 +2987,124 @@ namespace AiSessionManagerPortable
         {
             await RunBusyAsync("正在检查更新...", delegate
             {
-                if (Directory.Exists(Path.Combine(_rootDir, ".git")))
+                if (!Directory.Exists(Path.Combine(_rootDir, ".git")))
                 {
-                    var status = RunProcess("git.exe", "status --porcelain", _rootDir, 20000).Output.Trim();
-                    if (String.IsNullOrWhiteSpace(status))
-                    {
-                        var output = RunProcess("git.exe", "pull --ff-only origin main", _rootDir, 120000).Output.Trim();
-                        Dispatcher.Invoke(new Action(delegate { System.Windows.MessageBox.Show(output, "检查更新", MessageBoxButton.OK, MessageBoxImage.Information); }));
-                        return;
-                    }
+                    Dispatcher.Invoke(new Action(delegate { OpenPath(Program.GitHubUrl); }));
+                    return;
                 }
-                Dispatcher.Invoke(new Action(delegate { OpenPath(Program.GitHubUrl); }));
+
+                var status = RunProcess("git.exe", "status --porcelain", _rootDir, 20000).Output.Trim();
+                if (!String.IsNullOrWhiteSpace(status))
+                {
+                    Dispatcher.Invoke(new Action(delegate
+                    {
+                        System.Windows.MessageBox.Show(
+                            L("当前目录有本地修改，已停止自动更新，避免覆盖你的改动。\n\n请先提交、暂存或备份这些改动后再更新。",
+                              "The working tree has local changes. Automatic update was stopped to avoid overwriting your work.\n\nCommit, stash, or back up those changes before updating."),
+                            L("检查更新", "Check Update"),
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Warning);
+                    }));
+                    return;
+                }
+
+                var before = RunProcess("git.exe", "rev-parse --short HEAD", _rootDir, 20000).Output.Trim();
+                RunProcess("git.exe", "fetch origin main", _rootDir, 120000);
+                var remote = RunProcess("git.exe", "rev-parse --short origin/main", _rootDir, 20000).Output.Trim();
+                if (String.Equals(before, remote, StringComparison.OrdinalIgnoreCase))
+                {
+                    Dispatcher.Invoke(new Action(delegate
+                    {
+                        System.Windows.MessageBox.Show(
+                            L("已是最新版本。\n\n当前版本：", "Already up to date.\n\nCurrent version: ") + Program.AppVersion +
+                            "\nHEAD: " + before,
+                            L("检查更新", "Check Update"),
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Information);
+                    }));
+                    return;
+                }
+
+                var pull = RunProcess("git.exe", "pull --ff-only origin main", _rootDir, 120000).Output.Trim();
+                var after = RunProcess("git.exe", "rev-parse --short HEAD", _rootDir, 20000).Output.Trim();
+                var tempExe = Path.Combine(GetAppStateDirectory(), "ai-session-manager-portable.update.exe");
+                if (File.Exists(tempExe)) File.Delete(tempExe);
+                var build = RunProcess("powershell.exe",
+                    "-NoProfile -ExecutionPolicy RemoteSigned -File " + QuoteArg(Path.Combine(_rootDir, "tools", "build-exe.ps1")) + " -OutputPath " + QuoteArg(tempExe),
+                    _rootDir,
+                    120000).Output.Trim();
+                if (!File.Exists(tempExe)) throw new InvalidOperationException("更新已拉取，但未生成新版 exe。\n\n" + build);
+
+                var restart = false;
+                Dispatcher.Invoke(new Action(delegate
+                {
+                    restart = System.Windows.MessageBox.Show(
+                        L("更新已下载并构建完成，重启后生效。\n\n", "Update downloaded and built. Restart to apply it.\n\n") +
+                        "HEAD: " + before + " -> " + after + "\n\n" +
+                        L("是否现在重启并替换程序？", "Restart now and replace the app?"),
+                        L("检查更新", "Check Update"),
+                        MessageBoxButton.YesNo,
+                        MessageBoxImage.Information) == MessageBoxResult.Yes;
+                }));
+
+                if (!restart)
+                {
+                    Dispatcher.Invoke(new Action(delegate
+                    {
+                        SetStatus(L("更新已构建，重启软件后手动替换可生效：", "Update built. Replace manually after exiting: ") + tempExe);
+                    }));
+                    return;
+                }
+
+                var currentExe = Assembly.GetEntryAssembly().Location;
+                var scriptPath = WriteApplyUpdateScript(tempExe, currentExe, _rootDir, Process.GetCurrentProcess().Id);
+                Process.Start(new ProcessStartInfo("powershell.exe",
+                    "-NoProfile -ExecutionPolicy RemoteSigned -WindowStyle Hidden -File " + QuoteArg(scriptPath))
+                {
+                    WorkingDirectory = _rootDir,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                });
+                Dispatcher.Invoke(new Action(delegate { Application.Current.Shutdown(); }));
             });
+        }
+
+        private string WriteApplyUpdateScript(string sourceExe, string targetExe, string rootDir, int processId)
+        {
+            var scriptPath = Path.Combine(GetAppStateDirectory(), "apply-ai-session-manager-update.ps1");
+            var logPath = Path.Combine(GetAppStateDirectory(), "apply-ai-session-manager-update.log");
+            var sb = new StringBuilder();
+            sb.AppendLine("$ErrorActionPreference = 'Continue'");
+            sb.AppendLine("$SourceExe = " + QuotePowerShell(sourceExe));
+            sb.AppendLine("$TargetExe = " + QuotePowerShell(targetExe));
+            sb.AppendLine("$RootDir = " + QuotePowerShell(rootDir));
+            sb.AppendLine("$LogPath = " + QuotePowerShell(logPath));
+            sb.AppendLine("$AppProcessId = " + processId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            sb.AppendLine("function Write-UpdateLog([string]$Message) { Add-Content -LiteralPath $LogPath -Encoding UTF8 -Value ('[{0:yyyy-MM-dd HH:mm:ss.fff}] {1}' -f (Get-Date), $Message) }");
+            sb.AppendLine("Set-Content -LiteralPath $LogPath -Encoding UTF8 -Value '===== AI Session Manager update apply log ====='");
+            sb.AppendLine("Write-UpdateLog ('Source: ' + $SourceExe)");
+            sb.AppendLine("Write-UpdateLog ('Target: ' + $TargetExe)");
+            sb.AppendLine("try { Wait-Process -Id $AppProcessId -Timeout 60 -ErrorAction SilentlyContinue } catch { Write-UpdateLog ('Wait failed: ' + $_.Exception.Message) }");
+            sb.AppendLine("$copied = $false");
+            sb.AppendLine("for ($i = 0; $i -lt 60; $i++) {");
+            sb.AppendLine("  try {");
+            sb.AppendLine("    Copy-Item -LiteralPath $SourceExe -Destination $TargetExe -Force");
+            sb.AppendLine("    $copied = $true");
+            sb.AppendLine("    Write-UpdateLog 'Copy succeeded.'");
+            sb.AppendLine("    break");
+            sb.AppendLine("  } catch {");
+            sb.AppendLine("    Write-UpdateLog ('Copy attempt ' + ($i + 1) + ' failed: ' + $_.Exception.Message)");
+            sb.AppendLine("    Start-Sleep -Milliseconds 500");
+            sb.AppendLine("  }");
+            sb.AppendLine("}");
+            sb.AppendLine("if ($copied) {");
+            sb.AppendLine("  try { Start-Process -FilePath $TargetExe -WorkingDirectory $RootDir; Write-UpdateLog 'Restarted app.' } catch { Write-UpdateLog ('Restart failed: ' + $_.Exception.Message) }");
+            sb.AppendLine("  try { Remove-Item -LiteralPath $SourceExe -Force -ErrorAction SilentlyContinue } catch { }");
+            sb.AppendLine("} else {");
+            sb.AppendLine("  Write-UpdateLog 'Copy failed after all attempts.'");
+            sb.AppendLine("}");
+            File.WriteAllText(scriptPath, sb.ToString(), new UTF8Encoding(false));
+            return scriptPath;
         }
 
         private int ParsePageSize()
@@ -4436,12 +4592,15 @@ namespace AiSessionManagerPortable
             if (!String.IsNullOrWhiteSpace(provider)) AddCodexConfigArg(args, "model_provider", TomlString(provider));
             if (!String.IsNullOrWhiteSpace(node.AuthMode)) AddCodexConfigArg(args, "preferred_auth_method", TomlString(node.AuthMode));
             else if (!String.IsNullOrWhiteSpace(node.ApiKey)) AddCodexConfigArg(args, "preferred_auth_method", TomlString("apikey"));
+            if (node.DisableResponseStorage) AddCodexConfigArg(args, "disable_response_storage", "true");
             if (!String.IsNullOrWhiteSpace(provider) && !String.IsNullOrWhiteSpace(node.ProviderName))
                 AddCodexConfigArg(args, "model_providers." + provider + ".name", TomlString(node.ProviderName));
             if (!String.IsNullOrWhiteSpace(provider) && !String.IsNullOrWhiteSpace(node.BaseUrl))
                 AddCodexConfigArg(args, "model_providers." + provider + ".base_url", TomlString(node.BaseUrl));
             if (!String.IsNullOrWhiteSpace(provider) && !String.IsNullOrWhiteSpace(node.WireApi))
                 AddCodexConfigArg(args, "model_providers." + provider + ".wire_api", TomlString(node.WireApi));
+            if (!String.IsNullOrWhiteSpace(provider) && !String.IsNullOrWhiteSpace(node.ExperimentalBearerToken))
+                AddCodexConfigArg(args, "model_providers." + provider + ".experimental_bearer_token", TomlString(node.ExperimentalBearerToken));
             if (!String.IsNullOrWhiteSpace(provider) && !String.IsNullOrWhiteSpace(node.ApiKey))
                 AddCodexConfigArg(args, "model_providers." + provider + ".requires_openai_auth", "true");
         }
@@ -4462,7 +4621,7 @@ namespace AiSessionManagerPortable
         private Dictionary<string, string> BuildLaunchEnvironment(CcSwitchNode node)
         {
             var env = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            if (node != null && !String.IsNullOrWhiteSpace(node.ApiKey))
+            if (node != null && !String.IsNullOrWhiteSpace(node.ApiKey) && String.IsNullOrWhiteSpace(node.ExperimentalBearerToken))
                 env["OPENAI_API_KEY"] = node.ApiKey;
             return env;
         }
@@ -4475,6 +4634,7 @@ namespace AiSessionManagerPortable
             lines.Add(L("历史账号：", "History account: ") + DefaultString(node.HistoryProvider, IsOfficialCodexNode(node) ? "openai" : "custom") +
                 "  |  Codex provider: " + GetDisplayCodexProvider(node));
             if (!String.IsNullOrWhiteSpace(node.BaseUrl)) lines.Add("Base URL：" + node.BaseUrl);
+            if (!String.IsNullOrWhiteSpace(node.ExperimentalBearerToken)) lines.Add("代理令牌：PROXY_MANAGED");
             if (String.Equals(node.AuthMode, "chatgpt", StringComparison.OrdinalIgnoreCase)) lines.Add(L("认证：ChatGPT 登录", "Auth: ChatGPT login"));
             return String.Join(Environment.NewLine, lines.ToArray());
         }
