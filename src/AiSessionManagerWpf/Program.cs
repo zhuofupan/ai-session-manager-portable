@@ -24,7 +24,7 @@ namespace AiSessionManagerPortable
 {
     public static class Program
     {
-        public const string AppVersion = "2026.06.21.05";
+        public const string AppVersion = "2026.06.21.06";
         public const string AppAuthor = "Joff Pan";
         public const string GitHubUrl = "https://github.com/zhuofupan/ai-session-manager-portable";
 
@@ -3848,6 +3848,7 @@ namespace AiSessionManagerPortable
         private Border BuildNavigationPreviewPanel(int activeIndex, List<int> visibleIndexes)
         {
             var list = new StackPanel { Width = DetailNavigationPreviewWidth - 28 };
+            Border activeItem = null;
             foreach (var index in visibleIndexes)
             {
                 if (index < 0 || index >= _detailNavTargets.Count) continue;
@@ -3888,6 +3889,7 @@ namespace AiSessionManagerPortable
                     Background = button.Background,
                     Child = button
                 };
+                if (active) activeItem = item;
                 list.Children.Add(item);
             }
 
@@ -3899,6 +3901,16 @@ namespace AiSessionManagerPortable
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
                 Padding = new Thickness(8)
             };
+            if (activeItem != null)
+            {
+                scroll.Loaded += delegate
+                {
+                    Dispatcher.BeginInvoke(new Action(delegate
+                    {
+                        CenterNavigationPreviewItem(scroll, list, activeItem);
+                    }), System.Windows.Threading.DispatcherPriority.Loaded);
+                };
+            }
             return new Border
             {
                 Width = DetailNavigationPreviewWidth,
@@ -3909,6 +3921,31 @@ namespace AiSessionManagerPortable
                 CornerRadius = new CornerRadius(12),
                 Padding = new Thickness(0)
             };
+        }
+
+        private void CenterNavigationPreviewItem(ScrollViewer scroll, FrameworkElement container, FrameworkElement item)
+        {
+            if (scroll == null || container == null || item == null) return;
+            try
+            {
+                scroll.UpdateLayout();
+                container.UpdateLayout();
+                item.UpdateLayout();
+                var point = item.TransformToAncestor(container).Transform(new Point(0, 0));
+                var viewport = scroll.ViewportHeight > 0 ? scroll.ViewportHeight : Math.Min(scroll.ActualHeight, scroll.MaxHeight);
+                if (viewport <= 0) viewport = 120.0;
+                var itemHeight = item.ActualHeight > 0 ? item.ActualHeight : 28.0;
+                var offset = Math.Max(0, point.Y - Math.Max(0, (viewport - itemHeight) / 2.0));
+                scroll.ScrollToVerticalOffset(offset);
+                WriteDiagnostic("NavPreview scroll activeY=" + Math.Round(point.Y) +
+                    " itemHeight=" + Math.Round(itemHeight) +
+                    " viewport=" + Math.Round(viewport) +
+                    " offset=" + Math.Round(offset) + ".");
+            }
+            catch (Exception ex)
+            {
+                WriteDiagnostic("NavPreview scroll failed: " + ex.GetType().Name + ": " + ex.Message);
+            }
         }
 
         private string BuildNavigationPreview(ConversationEntry entry)
