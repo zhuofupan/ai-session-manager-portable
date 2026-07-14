@@ -531,6 +531,7 @@ namespace AiSessionManagerPortable
         private string _ccSwitchOfficialHistoryProvider = "";
         private string _ccSwitchThirdPartyHistoryProvider = "";
         private bool _fullRowsLoading = false;
+        private System.Windows.Threading.DispatcherTimer _turnCompletePopupHealthTimer;
 
         private readonly JavaScriptSerializer _json = new JavaScriptSerializer { MaxJsonLength = Int32.MaxValue, RecursionLimit = 100 };
         private static readonly ThemePalette[] ThemePalettes = BuildThemePalettes();
@@ -568,8 +569,28 @@ namespace AiSessionManagerPortable
             Loaded += delegate
             {
                 WriteDiagnostic("Startup Loaded event elapsedMs=" + startupSw.ElapsedMilliseconds + ".");
+                StartTurnCompletePopupHealthCheck();
                 Dispatcher.BeginInvoke(new Action(delegate { RefreshAll(); }), System.Windows.Threading.DispatcherPriority.ContextIdle);
             };
+            Closed += delegate
+            {
+                if (_turnCompletePopupHealthTimer != null) _turnCompletePopupHealthTimer.Stop();
+            };
+        }
+
+        private void StartTurnCompletePopupHealthCheck()
+        {
+            if (_turnCompletePopupHealthTimer != null) return;
+            _turnCompletePopupHealthTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(30)
+            };
+            _turnCompletePopupHealthTimer.Tick += delegate
+            {
+                if (IsTurnCompletePopupEnabled()) EnsureTurnCompletePopup(CurrentCodexHome());
+            };
+            _turnCompletePopupHealthTimer.Start();
+            WriteDiagnostic("TurnCompletePopup health check started intervalSeconds=30.");
         }
 
         private void SetIcon()
