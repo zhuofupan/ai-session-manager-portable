@@ -426,6 +426,13 @@ namespace AiSessionManagerPortable
         public string Preview { get; set; }
     }
 
+    internal sealed class DetailViewportState
+    {
+        public double VerticalOffset { get; set; }
+        public double HorizontalOffset { get; set; }
+        public IInputElement FocusedElement { get; set; }
+    }
+
     internal sealed class RefreshDataSnapshot
     {
         public List<Dictionary<string, object>> ThreadRows { get; set; }
@@ -515,6 +522,7 @@ namespace AiSessionManagerPortable
         private readonly List<DetailNavItem> _detailNavTargets = new List<DetailNavItem>();
         private readonly List<int> _detailNavVisibleIndexes = new List<int>();
         private const int MaxDetailNavigationButtons = 20;
+        private const int ConversationPreviewTextLength = 520;
         private const int InitialSessionLoadLimit = 60;
         private const int SessionLoadChunkSize = 120;
         private const int FullSessionLoadLimit = 1000;
@@ -1441,7 +1449,9 @@ namespace AiSessionManagerPortable
             {
                 Height = 28,
                 MinHeight = 28,
-                Padding = new Thickness(8, 2, 8, 2),
+                Padding = new Thickness(8, 0, 8, 0),
+                VerticalContentAlignment = VerticalAlignment.Center,
+                HorizontalContentAlignment = HorizontalAlignment.Left,
                 BorderBrush = ThemeBorderBrush(),
                 Background = SurfaceBrush(),
                 Foreground = InkBrush()
@@ -1456,6 +1466,7 @@ namespace AiSessionManagerPortable
             text.SetBinding(FrameworkElement.ToolTipProperty, new Binding("."));
             text.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
             text.SetValue(TextBlock.TextWrappingProperty, TextWrapping.NoWrap);
+            text.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
             text.SetValue(FrameworkElement.WidthProperty, 300.0);
             text.SetValue(TextBlock.ForegroundProperty, InkBrush());
             template.VisualTree = text;
@@ -1467,6 +1478,7 @@ namespace AiSessionManagerPortable
             var style = new Style(typeof(ComboBoxItem));
             style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(6, 4, 6, 4)));
             style.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty, HorizontalAlignment.Left));
+            style.Setters.Add(new Setter(Control.VerticalContentAlignmentProperty, VerticalAlignment.Center));
             return style;
         }
 
@@ -3784,18 +3796,20 @@ namespace AiSessionManagerPortable
                 var leadingGroup = new List<ConversationEntry>();
                 var responseGroup = new List<ConversationEntry>();
                 var seenUser = false;
+                var roundNumber = 0;
                 foreach (var entry in entries)
                 {
                     if (IsUserEntry(entry))
                     {
                         if (seenUser && responseGroup.Count > 0)
                         {
-                            AddResponseGroupBlock(doc, responseGroup);
+                            AddResponseGroupBlock(doc, responseGroup, "回复", roundNumber);
                             responseGroup.Clear();
                         }
+                        var entryRound = HasVisibleUserMessageText(entry.Text ?? "") ? ++roundNumber : 0;
                         seenUser = true;
                         var preview = BuildNavigationPreview(entry);
-                        var target = AddMessageBlock(doc, entry.Role, entry.Text, RoleBrush(entry.Role), RoleBackground(entry.Role), true);
+                        var target = AddMessageBlock(doc, entry.Role, entry.Text, RoleBrush(entry.Role), RoleBackground(entry.Role), true, entryRound);
                         if (!String.IsNullOrWhiteSpace(preview))
                             _detailNavTargets.Add(new DetailNavItem { Target = target, Preview = preview });
                     }
@@ -3807,7 +3821,7 @@ namespace AiSessionManagerPortable
                 }
                 if (responseGroup.Count > 0)
                 {
-                    AddResponseGroupBlock(doc, responseGroup);
+                    AddResponseGroupBlock(doc, responseGroup, "回复", roundNumber);
                 }
                 if (leadingGroup.Count > 0)
                 {
@@ -3954,7 +3968,12 @@ namespace AiSessionManagerPortable
             doc.Blocks.Add(p);
         }
 
-        private FrameworkContentElement AddMessageBlock(FlowDocument doc, string role, string text, Brush accent, Brush background, bool userRequest = false)
+        private static string AddRoundPrefix(int roundNumber, string label)
+        {
+            return roundNumber > 0 ? "第 " + roundNumber + " 轮 · " + (label ?? "") : label ?? "";
+        }
+
+        private FrameworkContentElement AddMessageBlock(FlowDocument doc, string role, string text, Brush accent, Brush background, bool userRequest = false, int roundNumber = 0)
         {
             var hasUserText = userRequest && HasVisibleUserMessageText(text ?? "");
             var autoUserMetadata = userRequest && !hasUserText && IsAutoGeneratedUserMetadataOnly(text ?? "");
@@ -3967,7 +3986,8 @@ namespace AiSessionManagerPortable
                 Padding = new Thickness(10, 8, 10, 8),
                 Margin = new Thickness(0, 0, 0, 10)
             };
-            section.Blocks.Add(new Paragraph(new Run(autoUserMetadata ? "自动信息" : (emphasizedUser ? "用户" : NormalizeRoleLabel(role))))
+            var roleLabel = autoUserMetadata ? "自动信息" : (emphasizedUser ? "用户" : NormalizeRoleLabel(role));
+            section.Blocks.Add(new Paragraph(new Run(AddRoundPrefix(roundNumber, roleLabel)))
             {
                 Foreground = autoUserMetadata ? MutedBrush() : accent,
                 FontWeight = FontWeights.Bold,
@@ -3976,7 +3996,7 @@ namespace AiSessionManagerPortable
 
             if (autoUserMetadata)
             {
-                AddCollapsibleAutoInformation(section, delegate(Section body)
+                AddCollapsibleAutoInformation(section, (text ?? "").Length, delegate(Section body)
                 {
                     AddUserRequestParagraphs(body, text ?? "");
                 });
@@ -3988,8 +4008,13 @@ namespace AiSessionManagerPortable
             return section;
         }
 
-        private void AddCollapsibleAutoInformation(Section parent, Action<Section> addExpandedContent)
+        private void AddCollapsibleAutoInformation(Section parent, int contentLength, Action<Section> addExpandedContent)
         {
+            if (contentLength <= ConversationPreviewTextLength)
+            {
+                addExpandedContent(parent);
+                return;
+            }
             var bodySection = new Section { Margin = new Thickness(0) };
             parent.Blocks.Add(bodySection);
             var expanded = false;
@@ -4021,22 +4046,55 @@ namespace AiSessionManagerPortable
                 Foreground = InkBrush(),
                 Cursor = Cursors.Hand,
                 FontWeight = FontWeights.SemiBold,
-                Focusable = true,
+                Focusable = false,
                 ToolTip = "展开或折叠自动信息"
             };
             ApplyButtonChrome(toggle);
+            DetailViewportState collapsedViewportState = null;
             toggle.Click += delegate
             {
-                expanded = !expanded;
-                toggle.Content = expanded ? "折叠" : "展开";
-                render();
-                footerText.Text = expanded ? "自动信息已展开，点击右侧【折叠】收起。" : "自动信息已折叠，点击右侧【展开】查看。";
+                var restoreState = expanded ? collapsedViewportState : CaptureDetailViewportState();
+                if (!expanded) collapsedViewportState = restoreState;
+                UpdateDetailDocumentRestoringViewport(delegate
+                {
+                    expanded = !expanded;
+                    toggle.Content = expanded ? "折叠" : "展开";
+                    render();
+                    footerText.Text = expanded ? "自动信息已展开，点击右侧【折叠】收起。" : "自动信息已折叠，点击右侧【展开】查看。";
+                }, restoreState);
             };
             var footerPanel = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
             DockPanel.SetDock(toggle, Dock.Right);
             footerPanel.Children.Add(toggle);
             footerPanel.Children.Add(footerText);
             parent.Blocks.Add(new BlockUIContainer(footerPanel) { Margin = new Thickness(0) });
+        }
+
+        private DetailViewportState CaptureDetailViewportState()
+        {
+            return new DetailViewportState
+            {
+                VerticalOffset = _detailBox == null ? 0 : _detailBox.VerticalOffset,
+                HorizontalOffset = _detailBox == null ? 0 : _detailBox.HorizontalOffset,
+                FocusedElement = Keyboard.FocusedElement
+            };
+        }
+
+        private void UpdateDetailDocumentRestoringViewport(Action update, DetailViewportState viewportState)
+        {
+            if (update == null) return;
+            viewportState = viewportState ?? CaptureDetailViewportState();
+            update();
+            if (_detailBox == null) return;
+            Dispatcher.BeginInvoke(new Action(delegate
+            {
+                _detailBox.ScrollToHorizontalOffset(viewportState.HorizontalOffset);
+                _detailBox.ScrollToVerticalOffset(viewportState.VerticalOffset);
+                if (viewportState.FocusedElement != null)
+                {
+                    try { Keyboard.Focus(viewportState.FocusedElement); } catch { }
+                }
+            }), System.Windows.Threading.DispatcherPriority.Loaded);
         }
 
         private void AddUserRequestParagraphs(Section section, string text)
@@ -4227,10 +4285,15 @@ namespace AiSessionManagerPortable
 
         private FrameworkContentElement AddResponseGroupBlock(FlowDocument doc, List<ConversationEntry> entries)
         {
-            return AddResponseGroupBlock(doc, entries, "回复");
+            return AddResponseGroupBlock(doc, entries, "回复", 0);
         }
 
         private FrameworkContentElement AddResponseGroupBlock(FlowDocument doc, List<ConversationEntry> entries, string titlePrefix)
+        {
+            return AddResponseGroupBlock(doc, entries, titlePrefix, 0);
+        }
+
+        private FrameworkContentElement AddResponseGroupBlock(FlowDocument doc, List<ConversationEntry> entries, string titlePrefix, int roundNumber)
         {
             var section = new Section
             {
@@ -4244,7 +4307,7 @@ namespace AiSessionManagerPortable
             var headerPanel = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
             headerPanel.Children.Add(new TextBlock
             {
-                Text = BuildResponseGroupTitle(entries, titlePrefix),
+                Text = AddRoundPrefix(roundNumber, BuildResponseGroupTitle(entries, titlePrefix)),
                 Foreground = SteelBrush(),
                 FontWeight = FontWeights.SemiBold,
                 VerticalAlignment = VerticalAlignment.Center
@@ -4253,8 +4316,14 @@ namespace AiSessionManagerPortable
 
             var bodySection = new Section { Margin = new Thickness(0) };
             section.Blocks.Add(bodySection);
-            var expanded = false;
+            var canCollapse = RequiresResponseGroupToggle(entries);
+            var expanded = !canCollapse;
             RenderResponseGroupBody(bodySection, entries, expanded);
+            if (!canCollapse)
+            {
+                doc.Blocks.Add(section);
+                return section;
+            }
             var footerText = new TextBlock
             {
                 Foreground = MutedBrush(),
@@ -4273,7 +4342,7 @@ namespace AiSessionManagerPortable
                 Foreground = InkBrush(),
                 Cursor = Cursors.Hand,
                 FontWeight = FontWeights.SemiBold,
-                Focusable = true,
+                Focusable = false,
                 ToolTip = "展开或折叠这组回复"
             };
             ApplyButtonChrome(toggle);
@@ -4282,12 +4351,18 @@ namespace AiSessionManagerPortable
             footerPanel.Children.Add(toggle);
             footerPanel.Children.Add(footerText);
             section.Blocks.Add(new BlockUIContainer(footerPanel) { Margin = new Thickness(0) });
+            DetailViewportState collapsedViewportState = null;
             Action toggleResponse = delegate
             {
-                expanded = !expanded;
-                toggle.Content = expanded ? "折叠" : "展开";
-                RenderResponseGroupBody(bodySection, entries, expanded);
-                footerText.Text = BuildResponseGroupFooterText(entries, expanded);
+                var restoreState = expanded ? collapsedViewportState : CaptureDetailViewportState();
+                if (!expanded) collapsedViewportState = restoreState;
+                UpdateDetailDocumentRestoringViewport(delegate
+                {
+                    expanded = !expanded;
+                    toggle.Content = expanded ? "折叠" : "展开";
+                    RenderResponseGroupBody(bodySection, entries, expanded);
+                    footerText.Text = BuildResponseGroupFooterText(entries, expanded);
+                }, restoreState);
             };
             toggle.Click += delegate { toggleResponse(); };
 
@@ -4317,6 +4392,12 @@ namespace AiSessionManagerPortable
             {
                 AddResponseEntryBlock(bodySection, entries[i], !expanded);
             }
+        }
+
+        private static bool RequiresResponseGroupToggle(List<ConversationEntry> entries)
+        {
+            if (entries == null || entries.Count == 0) return false;
+            return entries.Count > 3 || entries.Any(e => e != null && (e.Text ?? "").Length > ConversationPreviewTextLength);
         }
 
         private static string BuildResponseGroupFooterText(List<ConversationEntry> entries, bool expanded)
@@ -4351,10 +4432,11 @@ namespace AiSessionManagerPortable
                 Margin = new Thickness(0, 0, 0, 4)
             });
             var text = entry == null ? "" : entry.Text ?? "";
-            if (preview && text.Length > 520) text = text.Substring(0, 520).TrimEnd() + "...";
+            if (preview && text.Length > ConversationPreviewTextLength)
+                text = text.Substring(0, ConversationPreviewTextLength).TrimEnd() + "...";
             if (isContext)
             {
-                AddCollapsibleAutoInformation(section, delegate(Section body)
+                AddCollapsibleAutoInformation(section, (entry == null ? "" : entry.Text ?? "").Length, delegate(Section body)
                 {
                     body.Blocks.Add(CreateSelectableParagraph(text, MutedBrush(), new Thickness(0), true));
                 });
