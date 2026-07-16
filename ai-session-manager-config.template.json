@@ -16,6 +16,7 @@
     "lastSavedAt": "软件最后一次自动保存界面偏好的时间。正式配置文件会自动更新这个字段。",
     "uiLanguage": "界面语言。zh-CN 表示中文，en-US 表示英文。",
     "uiTheme": "界面皮肤。菜单显示为 Summer Ocean Breeze、Ocean Blue Serenity、Pastel Dreamland、Fresh Greens、Deep Sea；配置值可选：summer_ocean_breeze、ocean_blue_serenity、pastel_dreamland、fresh_greens、deep_sea。",
+    "showConversationDetails": "是否显示会话中的工具调用和内部分析细节。默认 false，只显示用户可见的助手步骤信息。",
     "windowWidthByLanguage": "分别记录中文和英文界面下的窗口宽度，避免切换语言时互相覆盖。",
     "security": "不要在这里写 API key、token、auth.json、config.toml 或 state_5.sqlite 内容。"
   },
@@ -35,6 +36,7 @@
   "includeArchived": false,
   "disableAppsOnFast": true,
   "turnCompletePopup": true,
+  "showConversationDetails": false,
   "usePowerShellTerminal": false,
   "approvalNeverOnLaunch": true,
   "loadChatOnLaunch": true,

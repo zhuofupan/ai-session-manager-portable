@@ -318,6 +318,7 @@ namespace AiSessionManagerPortable
         public bool LoadChatOnLaunch = true;
         public bool UsePowerShellTerminal = false;
         public bool TurnCompletePopup = true;
+        public bool ShowConversationDetails = false;
         public bool DisableAppsOnFast = true;
         public int Limit = 50;
         public int ConversationFontSize = 14;
@@ -409,6 +410,7 @@ namespace AiSessionManagerPortable
     {
         public string Role { get; set; }
         public string Text { get; set; }
+        public bool IsDetail { get; set; }
     }
 
     internal sealed class UserMessageSegment
@@ -501,6 +503,7 @@ namespace AiSessionManagerPortable
         private CheckBox _fullAccessBox;
         private CheckBox _usePowerShellBox;
         private CheckBox _turnPopupBox;
+        private CheckBox _showDetailsBox;
         private ListBox _sessionList;
         private TextBlock _statusText;
         private TextBlock _countText;
@@ -824,6 +827,26 @@ namespace AiSessionManagerPortable
             commandGrid.Children.Add(primary);
 
             var support = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            _turnPopupBox = new CheckBox
+            {
+                Content = L("弹窗提醒", "Popup"),
+                Margin = new Thickness(0, 0, 14, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                IsChecked = _config.TurnCompletePopup
+            };
+            _turnPopupBox.Checked += delegate
+            {
+                if (_suppressUiEvents) return;
+                SaveConfigWithDetectedInfo(false);
+                EnsureTurnCompletePopup(GetCodexHome());
+            };
+            _turnPopupBox.Unchecked += delegate
+            {
+                if (_suppressUiEvents) return;
+                SaveConfigWithDetectedInfo(false);
+                DisableTurnCompletePopup(GetCodexHome());
+            };
+            support.Children.Add(_turnPopupBox);
             support.Children.Add(MakeThemeMenuButton());
             support.Children.Add(MakeCommandButton("\uE713", L("配置", "Config"), false, delegate { EnsureAndOpenConfig(); }));
             support.Children.Add(MakeCommandButton("\uE897", L("帮助", "Help"), false, delegate { ShowHelpWindow(); }));
@@ -1015,7 +1038,7 @@ namespace AiSessionManagerPortable
             _fastBox = new CheckBox { Content = "Fast", Margin = new Thickness(0, 7, 16, 0), IsChecked = _config.FastModeOnLaunch };
             _fullAccessBox = new CheckBox { Content = L("完全访问", "Full access"), Margin = new Thickness(0, 7, 16, 0), IsChecked = _config.ApprovalNeverOnLaunch };
             _usePowerShellBox = new CheckBox { Content = "PowerShell", Margin = new Thickness(0, 7, 16, 0), IsChecked = _config.UsePowerShellTerminal };
-            _turnPopupBox = new CheckBox { Content = L("弹窗提醒", "Popup"), Margin = new Thickness(0, 7, 16, 0), IsChecked = _config.TurnCompletePopup };
+            _showDetailsBox = new CheckBox { Content = L("显示细节", "Details"), Margin = new Thickness(0, 7, 16, 0), IsChecked = _config.ShowConversationDetails };
             _loadChatBox.Checked += delegate { if (_suppressUiEvents) return; SaveConfigWithDetectedInfo(false); };
             _loadChatBox.Unchecked += delegate { if (_suppressUiEvents) return; SaveConfigWithDetectedInfo(false); };
             _fastBox.Checked += delegate { if (_suppressUiEvents) return; SaveConfigWithDetectedInfo(false); };
@@ -1024,17 +1047,21 @@ namespace AiSessionManagerPortable
             _fullAccessBox.Unchecked += delegate { if (_suppressUiEvents) return; SaveConfigWithDetectedInfo(false); };
             _usePowerShellBox.Checked += delegate { if (_suppressUiEvents) return; SaveConfigWithDetectedInfo(false); };
             _usePowerShellBox.Unchecked += delegate { if (_suppressUiEvents) return; SaveConfigWithDetectedInfo(false); };
-            _turnPopupBox.Checked += delegate
+            _showDetailsBox.Checked += delegate
             {
                 if (_suppressUiEvents) return;
+                _config.ShowConversationDetails = true;
                 SaveConfigWithDetectedInfo(false);
-                EnsureTurnCompletePopup(GetCodexHome());
+                var row = GetActiveDetailRow();
+                if (row != null) RenderDetail(row);
             };
-            _turnPopupBox.Unchecked += delegate
+            _showDetailsBox.Unchecked += delegate
             {
                 if (_suppressUiEvents) return;
+                _config.ShowConversationDetails = false;
                 SaveConfigWithDetectedInfo(false);
-                DisableTurnCompletePopup(GetCodexHome());
+                var row = GetActiveDetailRow();
+                if (row != null) RenderDetail(row);
             };
             optionActions.Children.Add(_loadChatBox);
             optionActions.Children.Add(_fastBox);
@@ -1049,7 +1076,7 @@ namespace AiSessionManagerPortable
             var rowEndGroup = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(16, 0, 0, 0) };
             Grid.SetColumn(rowEndGroup, 1);
             optionsRow.Children.Add(rowEndGroup);
-            rowEndGroup.Children.Add(_turnPopupBox);
+            rowEndGroup.Children.Add(_showDetailsBox);
             var fontSizeGroup = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top };
             rowEndGroup.Children.Add(fontSizeGroup);
             fontSizeGroup.Children.Add(MakeInlineLabel(L("字号", "Font")));
@@ -2105,6 +2132,7 @@ namespace AiSessionManagerPortable
                 cfg.LoadChatOnLaunch = GetBool(dict, "loadChatOnLaunch", true);
                 cfg.UsePowerShellTerminal = GetBool(dict, "usePowerShellTerminal", false);
                 cfg.TurnCompletePopup = GetBool(dict, "turnCompletePopup", true);
+                cfg.ShowConversationDetails = GetBool(dict, "showConversationDetails", false);
                 cfg.DisableAppsOnFast = GetBool(dict, "disableAppsOnFast", true);
                 cfg.Limit = GetInt(dict, "limit", 50);
                 cfg.ConversationFontSize = Math.Max(10, Math.Min(24, GetInt(dict, "conversationFontSize", 14)));
@@ -2836,6 +2864,7 @@ namespace AiSessionManagerPortable
                 dict["disableAppsOnFast"] = _config.DisableAppsOnFast;
                 dict["fastModeOnLaunch"] = _fastBox != null && _fastBox.IsChecked == true;
                 dict["turnCompletePopup"] = _turnPopupBox == null ? _config.TurnCompletePopup : _turnPopupBox.IsChecked == true;
+                dict["showConversationDetails"] = _showDetailsBox == null ? _config.ShowConversationDetails : _showDetailsBox.IsChecked == true;
                 dict["usePowerShellTerminal"] = _usePowerShellBox != null && _usePowerShellBox.IsChecked == true;
                 dict["approvalNeverOnLaunch"] = _fullAccessBox != null && _fullAccessBox.IsChecked == true;
                 dict["loadChatOnLaunch"] = _loadChatBox != null && _loadChatBox.IsChecked == true;
@@ -2861,6 +2890,7 @@ namespace AiSessionManagerPortable
             help["ccSwitchHome"] = "cc-switch.db 所在目录。";
             help["codexExe"] = "codex.exe 的完整路径；如果 PATH 已经能找到 codex.exe，可以留空。";
             help["uiTheme"] = "界面皮肤。菜单显示为 Summer Ocean Breeze、Ocean Blue Serenity、Pastel Dreamland、Fresh Greens、Deep Sea；配置值可选：summer_ocean_breeze、ocean_blue_serenity、pastel_dreamland、fresh_greens、deep_sea。";
+            help["showConversationDetails"] = "是否显示会话中的工具调用和内部分析细节。默认 false，只显示用户可见的助手步骤信息。";
             help["security"] = "不要在这里写 API key、token、auth.json、config.toml 或 state_5.sqlite 内容。";
             return help;
         }
@@ -3613,14 +3643,19 @@ namespace AiSessionManagerPortable
             AddSessionMetaBlock(doc, row);
 
             var resolvedPath = ResolveConversationPath(row);
-            var entries = ReadConversationEntries(resolvedPath, 0);
+            var allEntries = ReadConversationEntries(resolvedPath, 0);
+            var entries = FilterConversationEntriesForDisplay(allEntries);
             WriteDiagnostic("RenderDetail id='" + row.Id + "' entries=" + entries.Count + " path='" + resolvedPath + "'.");
-            if (entries.Count == 0)
+            if (allEntries.Count == 0)
             {
                 var fallbackPreview = BuildSessionFallbackPreview(row);
                 if (!String.IsNullOrWhiteSpace(fallbackPreview))
                     AddMessageBlock(doc, "会话预览", fallbackPreview, SteelBrush(), SoftPressedBrush());
                 AddMessageBlock(doc, "提示", BuildMissingConversationMessage(row, resolvedPath), AccentBrush(), ColorBrush(CurrentTheme().SystemBackground));
+            }
+            else if (entries.Count == 0)
+            {
+                AddMessageBlock(doc, "提示", "当前已隐藏工具调用和内部分析细节；勾选【显示细节】查看完整记录。", SteelBrush(), ColorBrush(CurrentTheme().SystemBackground));
             }
             else
             {
@@ -3691,10 +3726,16 @@ namespace AiSessionManagerPortable
             sb.AppendLine();
             sb.AppendLine(new string('=', 72));
             sb.AppendLine();
-            var entries = ReadConversationEntries(resolvedPath, 0);
-            if (entries.Count == 0)
+            var allEntries = ReadConversationEntries(resolvedPath, 0);
+            var entries = FilterConversationEntriesForDisplay(allEntries);
+            if (allEntries.Count == 0)
             {
                 sb.AppendLine(BuildMissingConversationMessage(row, resolvedPath));
+                return sb.ToString();
+            }
+            if (entries.Count == 0)
+            {
+                sb.AppendLine("当前已隐藏工具调用和内部分析细节；勾选【显示细节】查看完整记录。");
                 return sb.ToString();
             }
             foreach (var entry in entries)
@@ -3813,11 +3854,68 @@ namespace AiSessionManagerPortable
                 Margin = new Thickness(0, 0, 0, 5)
             });
 
-            if (userRequest) AddUserRequestParagraphs(section, text ?? "");
+            if (autoUserMetadata)
+            {
+                AddCollapsibleAutoInformation(section, delegate(Section body)
+                {
+                    AddUserRequestParagraphs(body, text ?? "");
+                });
+            }
+            else if (userRequest) AddUserRequestParagraphs(section, text ?? "");
             else section.Blocks.Add(CreateSelectableParagraph(text ?? "", InkBrush(), new Thickness(0)));
 
             doc.Blocks.Add(section);
             return section;
+        }
+
+        private void AddCollapsibleAutoInformation(Section parent, Action<Section> addExpandedContent)
+        {
+            var bodySection = new Section { Margin = new Thickness(0) };
+            parent.Blocks.Add(bodySection);
+            var expanded = false;
+            Action render = delegate
+            {
+                bodySection.Blocks.Clear();
+                if (expanded)
+                {
+                    addExpandedContent(bodySection);
+                }
+                else
+                {
+                    bodySection.Blocks.Add(CreateMutedSmallParagraph("自动信息已折叠，点击右侧【展开】查看。", new Thickness(0)));
+                }
+            };
+            render();
+
+            var toggle = new Button
+            {
+                Content = "展开",
+                Padding = new Thickness(10, 4, 10, 4),
+                MinWidth = 54,
+                MinHeight = 28,
+                Margin = new Thickness(8, 4, 0, 0),
+                Background = SurfaceBrush(),
+                BorderBrush = AquaBrush(),
+                Foreground = InkBrush(),
+                Cursor = Cursors.Hand,
+                FontWeight = FontWeights.SemiBold,
+                Focusable = true,
+                ToolTip = "展开或折叠自动信息"
+            };
+            ApplyButtonChrome(toggle);
+            toggle.Click += delegate
+            {
+                expanded = !expanded;
+                toggle.Content = expanded ? "折叠" : "展开";
+                render();
+            };
+            var footerPanel = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+            footerPanel.Children.Add(toggle);
+            parent.Blocks.Add(new BlockUIContainer(footerPanel) { Margin = new Thickness(0) });
         }
 
         private void AddUserRequestParagraphs(Section section, string text)
@@ -4021,24 +4119,6 @@ namespace AiSessionManagerPortable
             };
 
             var headerPanel = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
-            var toggle = new Button
-            {
-                Content = "展开",
-                Padding = new Thickness(10, 4, 10, 4),
-                MinWidth = 54,
-                MinHeight = 28,
-                Margin = new Thickness(8, 0, 0, 0),
-                Background = SurfaceBrush(),
-                BorderBrush = AquaBrush(),
-                Foreground = InkBrush(),
-                Cursor = Cursors.Hand,
-                FontWeight = FontWeights.SemiBold,
-                Focusable = true,
-                ToolTip = "展开或折叠这组回复"
-            };
-            ApplyButtonChrome(toggle);
-            DockPanel.SetDock(toggle, Dock.Right);
-            headerPanel.Children.Add(toggle);
             headerPanel.Children.Add(new TextBlock
             {
                 Text = BuildResponseGroupTitle(entries, titlePrefix),
@@ -4052,26 +4132,36 @@ namespace AiSessionManagerPortable
             section.Blocks.Add(bodySection);
             var expanded = false;
             RenderResponseGroupBody(bodySection, entries, expanded);
+            var toggle = new Button
+            {
+                Content = "展开",
+                Padding = new Thickness(10, 4, 10, 4),
+                MinWidth = 54,
+                MinHeight = 28,
+                Margin = new Thickness(8, 4, 0, 0),
+                Background = SurfaceBrush(),
+                BorderBrush = AquaBrush(),
+                Foreground = InkBrush(),
+                Cursor = Cursors.Hand,
+                FontWeight = FontWeights.SemiBold,
+                Focusable = true,
+                ToolTip = "展开或折叠这组回复"
+            };
+            ApplyButtonChrome(toggle);
+            var footerPanel = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+            footerPanel.Children.Add(toggle);
+            section.Blocks.Add(new BlockUIContainer(footerPanel) { Margin = new Thickness(0) });
             Action toggleResponse = delegate
             {
                 expanded = !expanded;
                 toggle.Content = expanded ? "折叠" : "展开";
                 RenderResponseGroupBody(bodySection, entries, expanded);
             };
-            toggle.PreviewMouseLeftButtonDown += delegate(object sender, MouseButtonEventArgs e)
-            {
-                toggleResponse();
-                e.Handled = true;
-            };
             toggle.Click += delegate { toggleResponse(); };
-            toggle.KeyDown += delegate(object sender, KeyEventArgs e)
-            {
-                if (e.Key == Key.Enter || e.Key == Key.Space)
-                {
-                    toggleResponse();
-                    e.Handled = true;
-                }
-            };
 
             doc.Blocks.Add(section);
             return section;
@@ -4132,7 +4222,17 @@ namespace AiSessionManagerPortable
             });
             var text = entry == null ? "" : entry.Text ?? "";
             if (preview && text.Length > 520) text = text.Substring(0, 520).TrimEnd() + "...";
-            section.Blocks.Add(CreateSelectableParagraph(text, isContext ? MutedBrush() : InkBrush(), new Thickness(0), isContext));
+            if (isContext)
+            {
+                AddCollapsibleAutoInformation(section, delegate(Section body)
+                {
+                    body.Blocks.Add(CreateSelectableParagraph(text, MutedBrush(), new Thickness(0), true));
+                });
+            }
+            else
+            {
+                section.Blocks.Add(CreateSelectableParagraph(text, InkBrush(), new Thickness(0)));
+            }
             parent.Blocks.Add(section);
         }
 
@@ -4766,7 +4866,12 @@ namespace AiSessionManagerPortable
                         text = text.Trim();
                         if (text.Length > 6000) text = text.Substring(0, 6000) + Environment.NewLine + "...";
                         if (IsDuplicateConversationEntry(entries, role, text)) continue;
-                        entries.Add(new ConversationEntry { Role = role, Text = text });
+                        entries.Add(new ConversationEntry
+                        {
+                            Role = role,
+                            Text = text,
+                            IsDetail = IsConversationDetail(obj, role, text)
+                        });
                     }
                 }
             }
@@ -4790,6 +4895,17 @@ namespace AiSessionManagerPortable
             return String.Equals(NormalizeConversationText(last.Text), NormalizeConversationText(text), StringComparison.Ordinal);
         }
 
+        private List<ConversationEntry> FilterConversationEntriesForDisplay(List<ConversationEntry> entries)
+        {
+            if (entries == null || ShouldShowConversationDetails()) return entries ?? new List<ConversationEntry>();
+            return entries.Where(e => e != null && !e.IsDetail).ToList();
+        }
+
+        private bool ShouldShowConversationDetails()
+        {
+            return _showDetailsBox == null ? _config.ShowConversationDetails : _showDetailsBox.IsChecked == true;
+        }
+
         private static string BuildUserDuplicateSignature(string text)
         {
             if (String.IsNullOrWhiteSpace(text)) return "";
@@ -4808,6 +4924,36 @@ namespace AiSessionManagerPortable
         {
             if (String.IsNullOrWhiteSpace(text)) return "";
             return Regex.Replace(text.Trim(), @"\s+", " ");
+        }
+
+        private static bool IsInternalAssistantDetail(string text)
+        {
+            var trimmed = (text ?? "").Trim();
+            return Regex.IsMatch(trimmed, @"^\*\*[^*\r\n]{3,240}\*\*$");
+        }
+
+        private static bool IsConversationDetail(Dictionary<string, object> obj, string role, string text)
+        {
+            if (String.Equals(role, "tool", StringComparison.OrdinalIgnoreCase)) return true;
+            var type = GetString(obj, "type");
+            if (String.Equals(type, "event_msg", StringComparison.OrdinalIgnoreCase))
+            {
+                var payload = GetDict(obj, "payload");
+                var payloadType = payload == null ? "" : GetString(payload, "type");
+                if (String.Equals(payloadType, "agent_reasoning", StringComparison.OrdinalIgnoreCase) ||
+                    String.Equals(payloadType, "agent_reasoning_delta", StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            if (String.Equals(type, "response_item", StringComparison.OrdinalIgnoreCase))
+            {
+                var payload = GetDict(obj, "payload");
+                var payloadType = payload == null ? "" : GetString(payload, "type");
+                if (String.Equals(payloadType, "reasoning", StringComparison.OrdinalIgnoreCase) ||
+                    String.Equals(payloadType, "function_call", StringComparison.OrdinalIgnoreCase) ||
+                    String.Equals(payloadType, "function_call_output", StringComparison.OrdinalIgnoreCase) ||
+                    String.Equals(payloadType, "custom_tool_call", StringComparison.OrdinalIgnoreCase) ||
+                    String.Equals(payloadType, "custom_tool_call_output", StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            return String.Equals(role, "assistant", StringComparison.OrdinalIgnoreCase) && IsInternalAssistantDetail(text);
         }
 
         private string ResolveConversationPath(SessionRow row)
@@ -4911,7 +5057,8 @@ namespace AiSessionManagerPortable
                 var role = payload == null ? "" : GetString(payload, "role");
                 if (!String.IsNullOrWhiteSpace(role)) return role;
                 var payloadType = payload == null ? "" : GetString(payload, "type");
-                if (payloadType == "function_call" || payloadType == "function_call_output") return "tool";
+                if (payloadType == "function_call" || payloadType == "function_call_output" ||
+                    payloadType == "custom_tool_call" || payloadType == "custom_tool_call_output") return "tool";
             }
             if (type == "event_msg")
             {
@@ -4941,7 +5088,7 @@ namespace AiSessionManagerPortable
             var dict = value as Dictionary<string, object>;
             if (dict != null)
             {
-                foreach (var key in new[] { "text", "content", "message", "prompt", "payload", "output", "arguments" })
+                foreach (var key in new[] { "text", "content", "message", "prompt", "payload", "output", "arguments", "input" })
                 {
                     if (dict.ContainsKey(key))
                     {
