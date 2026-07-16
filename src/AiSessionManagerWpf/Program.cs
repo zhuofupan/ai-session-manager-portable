@@ -328,6 +328,7 @@ namespace AiSessionManagerPortable
     {
         public string Label { get; set; }
         public string Value { get; set; }
+        public string CcSwitchNodeId { get; set; }
         public override string ToString() { return Label; }
     }
 
@@ -632,7 +633,7 @@ namespace AiSessionManagerPortable
             root.Children.Add(header);
 
             var body = new Grid { Margin = new Thickness(18, 0, 18, 12) };
-            body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(420) });
+            body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(450) });
             body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             Grid.SetRow(body, 1);
             root.Children.Add(body);
@@ -871,19 +872,29 @@ namespace AiSessionManagerPortable
 
             var accountGrid = new Grid { Margin = new Thickness(0, 0, 0, 7) };
             accountGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            accountGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            accountGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(112) });
             accountGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            accountGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            accountGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(150) });
+            accountGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             filters.Children.Add(accountGrid);
 
             _sourceCombo = MakeCombo();
             _targetCombo = MakeCombo();
-            _sourceCombo.MinWidth = 124;
-            _targetCombo.MinWidth = 124;
+            _sourceCombo.Width = 112;
+            _targetCombo.Width = 150;
             AddInlineControl(accountGrid, L("源账号", "Source"), _sourceCombo, 0);
             AddInlineControl(accountGrid, L("目标账号", "Target"), _targetCombo, 2);
+            var accountRefreshButton = MakeRefreshIconButton(L("从 cc-switch 刷新账号", "Refresh accounts from cc-switch"), delegate { RefreshAccountOptionsFromCcSwitch(); });
+            accountRefreshButton.Margin = new Thickness(4, 0, 0, 0);
+            Grid.SetColumn(accountRefreshButton, 4);
+            accountGrid.Children.Add(accountRefreshButton);
             _sourceCombo.SelectionChanged += delegate { if (_suppressUiEvents) return; ApplyFilters(true); SaveConfigWithDetectedInfo(false); };
-            _targetCombo.SelectionChanged += delegate { if (_suppressUiEvents) return; SaveConfigWithDetectedInfo(false); };
+            _targetCombo.SelectionChanged += delegate
+            {
+                if (_suppressUiEvents) return;
+                SyncTerminalAccountFromTarget();
+                SaveConfigWithDetectedInfo(false);
+            };
 
             _folderCombo = MakeCombo();
             _folderCombo.Margin = new Thickness(0);
@@ -1023,6 +1034,7 @@ namespace AiSessionManagerPortable
             _reasoningCombo.SelectedItem = String.IsNullOrWhiteSpace(_config.LaunchReasoningEffort) ? "default" : _config.LaunchReasoningEffort;
             _reasoningCombo.SelectionChanged += delegate { if (_suppressUiEvents) return; SaveConfigWithDetectedInfo(false); };
             settingsRow.Children.Add(_reasoningCombo);
+            settingsRow.Children.Add(MakeRefreshIconButton(L("从 cc-switch 刷新账号和终端选项", "Refresh accounts and terminal options from cc-switch"), delegate { RefreshAccountOptionsFromCcSwitch(); }));
 
             var optionsRow = new Grid { Margin = new Thickness(0, 0, 0, 10) };
             optionsRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -1427,8 +1439,9 @@ namespace AiSessionManagerPortable
         {
             return new ComboBox
             {
-                MinHeight = 32,
-                Padding = new Thickness(8, 4, 8, 4),
+                Height = 28,
+                MinHeight = 28,
+                Padding = new Thickness(8, 2, 8, 2),
                 BorderBrush = ThemeBorderBrush(),
                 Background = SurfaceBrush(),
                 Foreground = InkBrush()
@@ -1544,6 +1557,15 @@ namespace AiSessionManagerPortable
             ApplyButtonChrome(b);
             AttachClickFeedback(b, tooltip, handler);
             return b;
+        }
+
+        private Button MakeRefreshIconButton(string tooltip, RoutedEventHandler handler)
+        {
+            var button = MakeIconButton("\uE72C", tooltip, handler);
+            button.Width = 30;
+            button.Height = 30;
+            button.Margin = new Thickness(4, 0, 6, 8);
+            return button;
         }
 
         private Button MakeThemeMenuButton()
@@ -2381,6 +2403,7 @@ namespace AiSessionManagerPortable
                 {
                     PopulateFilters();
                     PopulateCcSwitchCombo();
+                    PopulateLaunchOptionCombos();
                 });
                 WriteDiagnostic("RefreshAll populate controls stageMs=" + stage.ElapsedMilliseconds + ".");
                 stage.Restart();
@@ -2559,8 +2582,20 @@ namespace AiSessionManagerPortable
                 .ToList();
             _sourceCombo.Items.Add(new ProviderItem { Label = AllAccountsLabel(), Value = "__all__" });
             foreach (var p in providers)
-            {
                 _sourceCombo.Items.Add(new ProviderItem { Label = p, Value = ProviderValue(p) });
+            foreach (var node in _ccSwitchNodes.OrderByDescending(n => n.IsCurrent).ThenBy(n => n.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                if (node == null || String.IsNullOrWhiteSpace(node.HistoryProvider)) continue;
+                _targetCombo.Items.Add(new ProviderItem
+                {
+                    Label = node.ToString(),
+                    Value = node.HistoryProvider,
+                    CcSwitchNodeId = node.Id
+                });
+            }
+            foreach (var p in providers)
+            {
+                if (_ccSwitchNodes.Any(n => n != null && HistoryProviderMatches(ProviderValue(p), n.HistoryProvider))) continue;
                 _targetCombo.Items.Add(new ProviderItem { Label = p, Value = ProviderValue(p) });
             }
             SelectProvider(_sourceCombo, DefaultString(oldSource, _config.DefaultSourceProvider));
@@ -2691,6 +2726,86 @@ namespace AiSessionManagerPortable
             foreach (var node in _ccSwitchNodes) _ccSwitchCombo.Items.Add(node);
             SelectCcSwitchNode(DefaultString(previous, _config.DefaultCcSwitchNode));
             if (_ccSwitchCombo.SelectedIndex < 0) _ccSwitchCombo.SelectedIndex = 0;
+        }
+
+        private void PopulateLaunchOptionCombos()
+        {
+            if (_modelCombo == null || _reasoningCombo == null) return;
+            var previousModel = SelectedComboText(_modelCombo, "default");
+            var previousReasoning = SelectedComboText(_reasoningCombo, "default");
+            var models = new List<string> { "default", "gpt-5.5", "gpt-5", "gpt-4.1" };
+            var reasoning = new List<string> { "default", "minimal", "low", "medium", "high" };
+            foreach (var node in _ccSwitchNodes)
+            {
+                if (node == null) continue;
+                if (!String.IsNullOrWhiteSpace(node.Model) && !models.Contains(node.Model, StringComparer.OrdinalIgnoreCase)) models.Add(node.Model);
+                if (!String.IsNullOrWhiteSpace(node.ReasoningEffort) && !reasoning.Contains(node.ReasoningEffort, StringComparer.OrdinalIgnoreCase)) reasoning.Add(node.ReasoningEffort);
+            }
+            if (!String.IsNullOrWhiteSpace(previousModel) && !models.Contains(previousModel, StringComparer.OrdinalIgnoreCase)) models.Add(previousModel);
+            if (!String.IsNullOrWhiteSpace(previousReasoning) && !reasoning.Contains(previousReasoning, StringComparer.OrdinalIgnoreCase)) reasoning.Add(previousReasoning);
+            _modelCombo.Items.Clear();
+            foreach (var item in models) _modelCombo.Items.Add(item);
+            _reasoningCombo.Items.Clear();
+            foreach (var item in reasoning) _reasoningCombo.Items.Add(item);
+            _modelCombo.SelectedItem = models.FirstOrDefault(m => String.Equals(m, previousModel, StringComparison.OrdinalIgnoreCase)) ?? "default";
+            _reasoningCombo.SelectedItem = reasoning.FirstOrDefault(m => String.Equals(m, previousReasoning, StringComparison.OrdinalIgnoreCase)) ?? "default";
+        }
+
+        private void RefreshAccountOptionsFromCcSwitch()
+        {
+            try
+            {
+                SetStatus("正在从 cc-switch 刷新账号信息...");
+                var resolved = ResolveCcSwitchDb();
+                if (String.IsNullOrWhiteSpace(resolved) || !File.Exists(resolved))
+                {
+                    SetStatus("未找到 cc-switch.db，无法刷新账号信息。");
+                    return;
+                }
+                _ccSwitchDb = resolved;
+                _config.CcSwitchHome = Path.GetDirectoryName(resolved);
+                RefreshCcSwitchHistorySettings();
+                LoadCcSwitchNodes();
+                RunWithoutUiEvents(delegate
+                {
+                    PopulateFilters();
+                    PopulateCcSwitchCombo();
+                    PopulateLaunchOptionCombos();
+                    ApplyCurrentCcSwitchSelection();
+                    ApplyFilters(true, false);
+                });
+                SaveConfigWithDetectedInfo(true);
+                UpdatePathText();
+                SetStatus("已从 cc-switch 刷新账号信息：" + _ccSwitchNodes.Count + " 个终端账号。");
+            }
+            catch (Exception ex)
+            {
+                SetStatus("刷新 cc-switch 账号失败：" + ex.Message);
+                WriteDiagnostic("RefreshAccountOptionsFromCcSwitch failed: " + ex.GetType().FullName + ": " + ex.Message);
+            }
+        }
+
+        private void SyncTerminalAccountFromTarget()
+        {
+            if (_targetCombo == null || _ccSwitchCombo == null) return;
+            var item = _targetCombo.SelectedItem as ProviderItem;
+            if (item == null || String.IsNullOrWhiteSpace(item.CcSwitchNodeId)) return;
+            var node = _ccSwitchNodes.FirstOrDefault(n => n != null && String.Equals(n.Id, item.CcSwitchNodeId, StringComparison.OrdinalIgnoreCase));
+            if (node == null) return;
+            _ccSwitchCombo.SelectedItem = node;
+            if (_modelCombo != null && !String.IsNullOrWhiteSpace(node.Model) && !_modelCombo.Items.Contains(node.Model)) _modelCombo.Items.Add(node.Model);
+            if (_reasoningCombo != null && !String.IsNullOrWhiteSpace(node.ReasoningEffort) && !_reasoningCombo.Items.Contains(node.ReasoningEffort)) _reasoningCombo.Items.Add(node.ReasoningEffort);
+            if (_modelCombo != null && !String.IsNullOrWhiteSpace(node.Model)) _modelCombo.SelectedItem = node.Model;
+            if (_reasoningCombo != null && !String.IsNullOrWhiteSpace(node.ReasoningEffort)) _reasoningCombo.SelectedItem = node.ReasoningEffort;
+        }
+
+        private void ApplyCurrentCcSwitchSelection()
+        {
+            var current = _ccSwitchNodes.FirstOrDefault(n => n != null && n.IsCurrent);
+            if (current == null) return;
+            if (_ccSwitchCombo != null) _ccSwitchCombo.SelectedItem = current;
+            if (_modelCombo != null && !String.IsNullOrWhiteSpace(current.Model)) _modelCombo.SelectedItem = current.Model;
+            if (_reasoningCombo != null && !String.IsNullOrWhiteSpace(current.ReasoningEffort)) _reasoningCombo.SelectedItem = current.ReasoningEffort;
         }
 
         private string InferHistoryProvider(Dictionary<string, object> row)
@@ -3133,7 +3248,12 @@ namespace AiSessionManagerPortable
                 _ccSwitchDb = resolved;
                 RefreshCcSwitchHistorySettings();
                 LoadCcSwitchNodes();
-                PopulateCcSwitchCombo();
+                RunWithoutUiEvents(delegate
+                {
+                    PopulateFilters();
+                    PopulateCcSwitchCombo();
+                    PopulateLaunchOptionCombos();
+                });
                 SaveConfigWithDetectedInfo(true);
                 UpdatePathText();
                 SetStatus("已加载 cc-switch.db 文件：" + resolved + "，Codex 节点 " + _ccSwitchNodes.Count + " 个。");
@@ -3880,20 +4000,22 @@ namespace AiSessionManagerPortable
                 {
                     addExpandedContent(bodySection);
                 }
-                else
-                {
-                    bodySection.Blocks.Add(CreateMutedSmallParagraph("自动信息已折叠，点击右侧【展开】查看。", new Thickness(0)));
-                }
             };
             render();
 
+            var footerText = new TextBlock
+            {
+                Foreground = MutedBrush(),
+                VerticalAlignment = VerticalAlignment.Center,
+                Text = expanded ? "自动信息已展开，点击右侧【折叠】收起。" : "自动信息已折叠，点击右侧【展开】查看。"
+            };
             var toggle = new Button
             {
                 Content = "展开",
                 Padding = new Thickness(10, 4, 10, 4),
                 MinWidth = 54,
                 MinHeight = 28,
-                Margin = new Thickness(8, 4, 0, 0),
+                Margin = new Thickness(8, 0, 0, 0),
                 Background = SurfaceBrush(),
                 BorderBrush = AquaBrush(),
                 Foreground = InkBrush(),
@@ -3908,13 +4030,12 @@ namespace AiSessionManagerPortable
                 expanded = !expanded;
                 toggle.Content = expanded ? "折叠" : "展开";
                 render();
+                footerText.Text = expanded ? "自动信息已展开，点击右侧【折叠】收起。" : "自动信息已折叠，点击右侧【展开】查看。";
             };
-            var footerPanel = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Right
-            };
+            var footerPanel = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
+            DockPanel.SetDock(toggle, Dock.Right);
             footerPanel.Children.Add(toggle);
+            footerPanel.Children.Add(footerText);
             parent.Blocks.Add(new BlockUIContainer(footerPanel) { Margin = new Thickness(0) });
         }
 
@@ -3934,6 +4055,7 @@ namespace AiSessionManagerPortable
                 {
                     var segmentText = (segment.Text ?? "").Trim();
                     if (String.IsNullOrWhiteSpace(segmentText)) continue;
+                    if (!ShouldShowConversationDetails() && !segment.IsUserText) continue;
                     section.Blocks.Add(segment.IsUserText
                         ? CreateUserRequestParagraph(segmentText)
                         : CreateMutedSmallParagraph(segmentText, new Thickness(0, 0, 0, 8)));
@@ -3943,7 +4065,7 @@ namespace AiSessionManagerPortable
 
             var before = text.Substring(0, index).Trim();
             var request = text.Substring(index + marker.Length).Trim();
-            if (!String.IsNullOrWhiteSpace(before))
+            if (ShouldShowConversationDetails() && !String.IsNullOrWhiteSpace(before))
             {
                 section.Blocks.Add(CreateMutedSmallParagraph(before, new Thickness(0, 0, 0, 8)));
             }
@@ -4017,7 +4139,7 @@ namespace AiSessionManagerPortable
             segments[segments.Count - 1].Text += line + Environment.NewLine;
         }
 
-        private bool HasVisibleUserMessageText(string text)
+        private static bool HasVisibleUserMessageText(string text)
         {
             var marker = "## My request for Codex:";
             var index = (text ?? "").IndexOf(marker, StringComparison.OrdinalIgnoreCase);
@@ -4039,7 +4161,8 @@ namespace AiSessionManagerPortable
                     section.Blocks.Add(CreateUserRequestParagraph(userText));
                     addedRequest = true;
                 }
-                section.Blocks.Add(CreateMutedSmallParagraph(match.Value.Trim(), new Thickness(0, addedRequest ? 6 : 0, 0, 6)));
+                if (ShouldShowConversationDetails())
+                    section.Blocks.Add(CreateMutedSmallParagraph(match.Value.Trim(), new Thickness(0, addedRequest ? 6 : 0, 0, 6)));
                 position = match.Index + match.Length;
             }
 
@@ -4132,13 +4255,19 @@ namespace AiSessionManagerPortable
             section.Blocks.Add(bodySection);
             var expanded = false;
             RenderResponseGroupBody(bodySection, entries, expanded);
+            var footerText = new TextBlock
+            {
+                Foreground = MutedBrush(),
+                VerticalAlignment = VerticalAlignment.Center,
+                Text = BuildResponseGroupFooterText(entries, expanded)
+            };
             var toggle = new Button
             {
                 Content = "展开",
                 Padding = new Thickness(10, 4, 10, 4),
                 MinWidth = 54,
                 MinHeight = 28,
-                Margin = new Thickness(8, 4, 0, 0),
+                Margin = new Thickness(8, 0, 0, 0),
                 Background = SurfaceBrush(),
                 BorderBrush = AquaBrush(),
                 Foreground = InkBrush(),
@@ -4148,18 +4277,17 @@ namespace AiSessionManagerPortable
                 ToolTip = "展开或折叠这组回复"
             };
             ApplyButtonChrome(toggle);
-            var footerPanel = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Right
-            };
+            var footerPanel = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
+            DockPanel.SetDock(toggle, Dock.Right);
             footerPanel.Children.Add(toggle);
+            footerPanel.Children.Add(footerText);
             section.Blocks.Add(new BlockUIContainer(footerPanel) { Margin = new Thickness(0) });
             Action toggleResponse = delegate
             {
                 expanded = !expanded;
                 toggle.Content = expanded ? "折叠" : "展开";
                 RenderResponseGroupBody(bodySection, entries, expanded);
+                footerText.Text = BuildResponseGroupFooterText(entries, expanded);
             };
             toggle.Click += delegate { toggleResponse(); };
 
@@ -4189,14 +4317,16 @@ namespace AiSessionManagerPortable
             {
                 AddResponseEntryBlock(bodySection, entries[i], !expanded);
             }
-            if (!expanded && entries.Count > count)
-            {
-                bodySection.Blocks.Add(new Paragraph(new Run("已折叠 " + (entries.Count - count) + " 项，点击右侧【展开】查看全部。"))
-                {
-                    Foreground = MutedBrush(),
-                    Margin = new Thickness(0, 4, 0, 0)
-                });
-            }
+        }
+
+        private static string BuildResponseGroupFooterText(List<ConversationEntry> entries, bool expanded)
+        {
+            var total = entries == null ? 0 : entries.Count;
+            if (expanded) return "已展开全部 " + total + " 项，点击右侧【折叠】收起。";
+            var hidden = Math.Max(0, total - Math.Min(total, 3));
+            return hidden > 0
+                ? "已折叠 " + hidden + " 项，点击右侧【展开】查看全部。"
+                : "当前显示内容预览，点击右侧【展开】查看完整内容。";
         }
 
         private void AddResponseEntryBlock(Section parent, ConversationEntry entry, bool preview)
@@ -4935,6 +5065,8 @@ namespace AiSessionManagerPortable
         private static bool IsConversationDetail(Dictionary<string, object> obj, string role, string text)
         {
             if (String.Equals(role, "tool", StringComparison.OrdinalIgnoreCase)) return true;
+            if (String.Equals(role, "user", StringComparison.OrdinalIgnoreCase) &&
+                IsAutoGeneratedUserMetadataOnly(text) && !HasVisibleUserMessageText(text)) return true;
             var type = GetString(obj, "type");
             if (String.Equals(type, "event_msg", StringComparison.OrdinalIgnoreCase))
             {
@@ -6300,13 +6432,21 @@ namespace AiSessionManagerPortable
             return (label ?? "").Trim();
         }
 
+        private static bool HistoryProviderMatches(string provider, string historyProvider)
+        {
+            if (String.Equals(provider, historyProvider, StringComparison.OrdinalIgnoreCase)) return true;
+            var left = (provider ?? "").Trim().ToLowerInvariant();
+            var right = (historyProvider ?? "").Trim().ToLowerInvariant();
+            return (left == "anyrouter" && right == "custom") || (left == "custom" && right == "anyrouter");
+        }
+
         private static void SelectProvider(ComboBox combo, string value)
         {
             if (combo == null) return;
             foreach (var item in combo.Items)
             {
                 var p = item as ProviderItem;
-                if (p != null && String.Equals(p.Value, value, StringComparison.OrdinalIgnoreCase))
+                if (p != null && (String.Equals(p.Value, value, StringComparison.OrdinalIgnoreCase) || HistoryProviderMatches(p.Value, value)))
                 {
                     combo.SelectedItem = item;
                     return;
