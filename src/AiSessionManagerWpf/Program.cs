@@ -27,14 +27,14 @@ using System.Windows.Media.Imaging;
 [assembly: AssemblyCompany("Joff Pan")]
 [assembly: AssemblyProduct("AI Session Manager Portable")]
 [assembly: AssemblyCopyright("Copyright (c) Joff Pan")]
-[assembly: AssemblyVersion("2026.6.22.1")]
-[assembly: AssemblyFileVersion("2026.6.22.1")]
+[assembly: AssemblyVersion("2026.7.17.1")]
+[assembly: AssemblyFileVersion("2026.7.17.1")]
 
 namespace AiSessionManagerPortable
 {
     public static class Program
     {
-        public const string AppVersion = "2026.06.22.1";
+        public const string AppVersion = "2026.07.17.1";
         public const string AppAuthor = "Joff Pan";
         public const string GitHubUrl = "https://github.com/zhuofupan/ai-session-manager-portable";
         public const string GitHubLatestReleaseApiUrl = "https://api.github.com/repos/zhuofupan/ai-session-manager-portable/releases/latest";
