@@ -214,11 +214,10 @@ The GUI can enable a local completion popup for Codex responses. When `弹窗提
 
 - writes the local Codex `notify` setting to use `tools\ai-session-turn-ended-notify.vbs`;
 - starts `tools\ai-session-turn-complete-monitor.vbs`;
-- watches recent `rollout-*.jsonl` files for `task_complete` events;
+- shows a popup only for fresh `task_complete` events from top-level Desktop or terminal tasks; subagents, replayed history, and unfinished turns are ignored;
 - shows a topmost Windows popup and plays a short notification sound;
 - includes a compact account, chat, and last user-task summary when local rollout context is available.
-- also tries to parse event arguments passed by Codex Desktop's direct `notify` call; when those arguments are incomplete, it fills account, chat, and task context from the latest local rollout file.
-- shows a separate orange popup if a permission or approval request appears to be waiting for more than 10 seconds.
+- confirms direct Desktop or terminal `notify` calls against a fresh completion event in that account's local rollout, enriches the popup with account/chat/task context, and alerts only once per completion.
 
 This is local-only. It reads local session files and does not send notification data anywhere.
 

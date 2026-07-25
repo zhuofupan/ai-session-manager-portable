@@ -94,6 +94,7 @@ $script:Contexts = @{}
 $script:SeenTurns = New-Object 'System.Collections.Generic.HashSet[string]'
 $script:PendingApprovals = @{}
 $script:StartupCompletionGraceSeconds = 60
+$script:CompletionFreshnessSeconds = 90
 $script:MonitorHash = ''
 $script:StopFilePath = ''
 
@@ -175,6 +176,7 @@ function Get-ContextForFile {
             Provider          = ''
             Cwd               = ''
             ThreadId          = ''
+            IsSubagent        = $false
             LastUserTask      = ''
             PendingUserTask   = ''
             CompletedUserTask = ''
@@ -191,6 +193,20 @@ function Get-RolloutTurnId {
     $value = Get-ObjectStringProperty $Object.payload @('turn_id', 'turnId', 'id')
     if (-not [string]::IsNullOrWhiteSpace($value)) { return $value }
     return (Get-ObjectStringProperty $Object @('turn_id', 'turnId', 'id'))
+}
+
+function Test-CompletionPayloadType {
+    param([AllowNull()][string]$Value)
+
+    $clean = ([string]$Value).Trim().ToLowerInvariant()
+    return $clean -eq 'task_complete'
+}
+
+function Test-SubagentSessionSource {
+    param([AllowNull()]$Source)
+
+    if ($null -eq $Source) { return $false }
+    return $null -ne $Source.PSObject.Properties['subagent']
 }
 
 function Get-MessageText {
@@ -239,6 +255,7 @@ function Update-RolloutContext {
         if (-not [string]::IsNullOrWhiteSpace([string]$Object.payload.id)) {
             $context.ThreadId = [string]$Object.payload.id
         }
+        $context.IsSubagent = Test-SubagentSessionSource $Object.payload.source
         return
     }
 
@@ -256,8 +273,11 @@ function Update-RolloutContext {
         return
     }
 
-    if ([string]$Object.type -eq 'event_msg' -and $payloadType -eq 'task_complete') {
+    if ([string]$Object.type -eq 'event_msg' -and (Test-CompletionPayloadType $payloadType)) {
         $context.CompletedTurnId = Get-RolloutTurnId $Object
+        if ([string]::IsNullOrWhiteSpace([string]$context.CompletedTurnId)) {
+            $context.CompletedTurnId = [string]$Object.timestamp
+        }
         if (-not [string]::IsNullOrWhiteSpace([string]$context.PendingUserTask)) {
             $context.CompletedUserTask = [string]$context.PendingUserTask
         }
@@ -363,6 +383,7 @@ function Invoke-CompletionPopup {
 
     $message = "$accountLabel$provider | $cwdLabel`r`n$threadLabelPrefix$threadLabel`r`n$taskLabel$task"
     $messageBase64 = ConvertTo-Utf8Base64 $message
+    $completionId = [string]$Context.CompletedTurnId
     Write-DiagnosticLog ("completion popup requested provider='{0}' thread='{1}' task='{2}'" -f $provider, $threadLabel, $task)
 
     if (-not [string]::IsNullOrWhiteSpace($NotifierPath) -and
@@ -382,6 +403,8 @@ function Invoke-CompletionPopup {
             'Monitor',
             '-CodexHome',
             $script:CodexHome,
+            '-CompletionId',
+            $completionId,
             '-MessageBase64',
             $messageBase64,
             '-Seconds',
@@ -401,6 +424,8 @@ function Invoke-CompletionPopup {
             'Monitor',
             '-CodexHome',
             $script:CodexHome,
+            '-CompletionId',
+            $completionId,
             '-MessageBase64',
             $messageBase64,
             '-Seconds',
@@ -749,15 +774,27 @@ function Get-TaskCompleteKey {
 
     try {
         if ([string]$Object.type -ne 'event_msg') { return $null }
-        if ([string]$Object.payload.type -ne 'task_complete') { return $null }
+        $payloadType = ([string]$Object.payload.type).Trim().ToLowerInvariant()
+        if (-not (Test-CompletionPayloadType $payloadType)) { return $null }
 
         $eventTime = [DateTimeOffset]::MinValue
         if (-not [string]::IsNullOrWhiteSpace([string]$Object.timestamp)) {
             $eventTime = [DateTimeOffset]::Parse([string]$Object.timestamp)
         }
+        elseif ($Object.payload.completed_at) {
+            try { $eventTime = [DateTimeOffset]::FromUnixTimeSeconds([int64]$Object.payload.completed_at) } catch { }
+        }
+        elseif ($Object.payload.completedAt) {
+            try { $eventTime = [DateTimeOffset]::Parse([string]$Object.payload.completedAt) } catch { }
+        }
+        if ($eventTime -eq [DateTimeOffset]::MinValue) { return $null }
         if ($eventTime -lt $script:MonitorStartedAt.AddSeconds(-1 * [int]$script:StartupCompletionGraceSeconds)) { return $null }
+        $ageSeconds = ([DateTimeOffset]::UtcNow - $eventTime).TotalSeconds
+        if ($ageSeconds -lt -45 -or $ageSeconds -gt [int]$script:CompletionFreshnessSeconds) { return $null }
 
         $turnId = [string]$Object.payload.turn_id
+        if ([string]::IsNullOrWhiteSpace($turnId)) { $turnId = [string]$Object.payload.turnId }
+        if ([string]::IsNullOrWhiteSpace($turnId)) { $turnId = [string]$Object.payload.id }
         if ([string]::IsNullOrWhiteSpace($turnId)) {
             $turnId = [string]$Object.timestamp
         }
@@ -768,6 +805,40 @@ function Get-TaskCompleteKey {
     catch {
         return $null
     }
+}
+
+function Test-TaskCompleteDetection {
+    $now = [DateTimeOffset]::UtcNow
+    $subagentSource = '{"subagent":{"thread_spawn":{"parent_thread_id":"parent","depth":1}}}' | ConvertFrom-Json
+    $fresh = [pscustomobject]@{
+        timestamp = $now.ToString('o')
+        type      = 'event_msg'
+        payload   = [pscustomobject]@{ type = 'task_complete'; turn_id = 'fresh-turn' }
+    }
+    $nonTaskCompletion = [pscustomobject]@{
+        timestamp = $now.AddSeconds(-1).ToString('o')
+        type      = 'event_msg'
+        payload   = [pscustomobject]@{ type = 'response_complete'; turnId = 'response-turn' }
+    }
+    $stale = [pscustomobject]@{
+        timestamp = $now.AddSeconds(-1 * ([int]$script:CompletionFreshnessSeconds + 1)).ToString('o')
+        type      = 'event_msg'
+        payload   = [pscustomobject]@{ type = 'task_complete'; turn_id = 'stale-turn' }
+    }
+    $unfinished = [pscustomobject]@{
+        timestamp = $now.ToString('o')
+        type      = 'event_msg'
+        payload   = [pscustomobject]@{ type = 'agent_message'; turn_id = 'unfinished-turn' }
+    }
+
+    return (
+        (Get-TaskCompleteKey $fresh) -eq 'fresh-turn' -and
+        $null -eq (Get-TaskCompleteKey $nonTaskCompletion) -and
+        $null -eq (Get-TaskCompleteKey $stale) -and
+        $null -eq (Get-TaskCompleteKey $unfinished) -and
+        (Test-SubagentSessionSource $subagentSource) -and
+        -not (Test-SubagentSessionSource 'vscode')
+    )
 }
 
 function Process-RolloutFile {
@@ -813,19 +884,20 @@ function Process-RolloutFile {
             continue
         }
         Update-RolloutContext -Path $path -Object $obj
-        $approvalInfo = Get-ApprovalEventInfo -Object $obj -Path $path
-        if ($approvalInfo) {
-            Register-ApprovalEvent -Info $approvalInfo -Context (Get-ContextForFile $path)
-        }
         $taskCompleteKey = Get-TaskCompleteKey $obj
         if (-not [string]::IsNullOrWhiteSpace($taskCompleteKey) -and $script:SeenTurns.Add($taskCompleteKey)) {
-            Write-DiagnosticLog "task_complete detected turn='$taskCompleteKey' path='$path'."
+            $context = Get-ContextForFile $path
+            if ([bool]$context.IsSubagent) {
+                Write-DiagnosticLog "subagent task_complete ignored turn='$taskCompleteKey' path='$path'."
+                continue
+            }
+            Write-DiagnosticLog "top-level task_complete detected turn='$taskCompleteKey' path='$path'."
             foreach ($key in @($script:PendingApprovals.Keys)) {
                 if ($key.StartsWith("$path|", [System.StringComparison]::OrdinalIgnoreCase)) {
                     $script:PendingApprovals.Remove($key)
                 }
             }
-            Invoke-CompletionPopup -Context (Get-ContextForFile $path)
+            Invoke-CompletionPopup -Context $context
         }
     }
 }
@@ -903,6 +975,9 @@ if ($SelfTest) {
     if (-not (Test-ApprovalEventDetection)) {
         throw 'Monitor SelfTest failed: approval event detection is too broad.'
     }
+    if (-not (Test-TaskCompleteDetection)) {
+        throw 'Monitor SelfTest failed: completion freshness detection is incorrect.'
+    }
     Write-Output "Monitor SelfTest OK. CodexHome: $script:CodexHome"
     return
 }
@@ -912,7 +987,9 @@ try {
     [void](Invoke-MonitorScan)
     $watcher = New-RolloutFileWatcher
     $pollMilliseconds = [Math]::Max(250, [Math]::Min(1000, [int]$PollSeconds * 1000))
-    $rescanSeconds = [Math]::Max(30, [Math]::Min(120, [int]$PollSeconds * 30))
+    # FileSystemWatcher can miss writes when Codex replaces/renames rollout files.
+    # Keep a short polling fallback so completion notifications remain reliable.
+    $rescanSeconds = [Math]::Max(3, [Math]::Min(15, [int]$PollSeconds * 3))
     $lastRescanUtc = [DateTime]::UtcNow
     while ($true) {
         if (Test-MonitorStopRequested) { break }
@@ -936,7 +1013,6 @@ try {
             [void](Invoke-MonitorScan)
             Start-Sleep -Milliseconds $pollMilliseconds
         }
-        Check-PendingApprovalPopups
     }
 }
 finally {

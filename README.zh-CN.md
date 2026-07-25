@@ -216,10 +216,9 @@ GUI 里的 `弹窗提醒` 默认用于本地提醒。启用后，工具会：
 - 把 Codex 的 `notify` 设置写成 `tools\ai-session-turn-ended-notify.vbs`；
 - 启动 `tools\ai-session-turn-complete-monitor.vbs`；
 - 监控最近的 `rollout-*.jsonl` 文件；
-- 发现 `task_complete` 事件后弹出置顶提示并播放提示音；
+- 只在桌面端或终端的顶层任务出现刚发生的 `task_complete` 完成事件后弹出置顶提示并播放提示音；子代理、旧历史或未完成的会话不会触发；
 - 弹窗会尽量显示账号、完成的聊天和最近一条用户任务摘要。
-- 桌面版 Codex 直接调用 `notify` 时，工具也会尝试解析 Codex 传入的事件参数；参数不足时会从最近的本地 rollout 记录补账号、会话和任务摘要。
-- 如果检测到权限审批请求等待超过 10 秒，会弹出单独的橙色提醒。
+- 桌面版或终端版 Codex 直接调用 `notify` 时，工具会先在对应账号的本地 rollout 中确认刚发生的完成事件，再补充账号、会话和任务摘要；同一个完成事件只提醒一次。
 
 这个功能只读取本机 session 文件，不会把通知内容发送到外部服务。
 

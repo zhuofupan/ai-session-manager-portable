@@ -6,6 +6,7 @@ param(
     [int]$Seconds = 12,
     [string]$ForwardBase64,
     [string]$CodexHome,
+    [string]$CompletionId,
     [string]$Kind = 'Complete',
     [string]$Source,
     [switch]$ForwardOnly,
@@ -22,6 +23,7 @@ $utf8Strict = New-Object System.Text.UTF8Encoding -ArgumentList $false, $true
 [Console]::OutputEncoding = $utf8
 $OutputEncoding = $utf8
 $script:NotifyStartedAtUtc = [DateTime]::UtcNow
+$script:CompletionFreshnessSeconds = 90
 
 function Write-DiagnosticLog {
     param([AllowNull()][string]$Text)
@@ -249,6 +251,10 @@ function Apply-ForwardedNotifyArguments {
                 if (($i + 1) -lt $items.Count) { $script:CodexHome = [string]$items[++$i] }
                 continue
             }
+            { $_ -in @('-completionid', '--completionid') } {
+                if (($i + 1) -lt $items.Count) { $script:CompletionId = [string]$items[++$i] }
+                continue
+            }
             { $_ -in @('-kind', '--kind') } {
                 if (($i + 1) -lt $items.Count) { $script:Kind = [string]$items[++$i] }
                 continue
@@ -355,11 +361,19 @@ function Test-UserTaskText {
     return $true
 }
 
+function Test-SubagentSessionSource {
+    param([AllowNull()]$Source)
+
+    if ($null -eq $Source) { return $false }
+    return $null -ne $Source.PSObject.Properties['subagent']
+}
+
 function New-RolloutContext {
     return [pscustomobject]@{
         Provider         = ''
         Cwd              = ''
         ThreadId         = ''
+        IsSubagent       = $false
         LastSeenUserTask = ''
         PendingUserTask  = ''
         PendingTurnId    = ''
@@ -395,7 +409,9 @@ function Get-RolloutTurnId {
 
     $value = Get-PropertyValue -Object $Object.payload -Names @('turn_id', 'turnId', 'id')
     if (-not [string]::IsNullOrWhiteSpace($value)) { return $value }
-    return (Get-PropertyValue -Object $Object -Names @('turn_id', 'turnId', 'id'))
+    $value = Get-PropertyValue -Object $Object -Names @('turn_id', 'turnId', 'id')
+    if (-not [string]::IsNullOrWhiteSpace($value)) { return $value }
+    return (Get-PropertyValue -Object $Object -Names @('timestamp'))
 }
 
 function Split-RolloutLines {
@@ -516,6 +532,7 @@ function Update-RolloutContext {
                 break
             }
         }
+        $Context.IsSubagent = Test-SubagentSessionSource $Object.payload.source
         return
     }
 
@@ -610,6 +627,7 @@ function Copy-RolloutMetadataContext {
     $copy.Provider = [string]$Context.Provider
     $copy.Cwd = [string]$Context.Cwd
     $copy.ThreadId = [string]$Context.ThreadId
+    $copy.IsSubagent = [bool]$Context.IsSubagent
     return $copy
 }
 
@@ -634,7 +652,9 @@ function Get-RolloutMetadataContextFromFile {
 function Test-RolloutTaskCompleteObject {
     param([AllowNull()]$Object)
 
-    return ([string]$Object.type -eq 'event_msg' -and [string]$Object.payload.type -eq 'task_complete')
+    if ([string]$Object.type -ne 'event_msg') { return $false }
+    $payloadType = ([string]$Object.payload.type).Trim().ToLowerInvariant()
+    return $payloadType -eq 'task_complete'
 }
 
 function Test-RolloutTaskStartedObject {
@@ -686,7 +706,7 @@ function Get-RolloutCompletionCandidatesNearAnchor {
     param(
         [AllowNull()][object[]]$Events,
         [Parameter(Mandatory)][datetime]$AnchorUtc,
-        [int]$MaxPastSeconds = 300,
+        [int]$MaxPastSeconds = 90,
         [int]$FutureGraceSeconds = 45
     )
 
@@ -736,11 +756,12 @@ function Get-RolloutCompletionContextNearAnchor {
     param(
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)][datetime]$AnchorUtc,
-        [int]$MaxPastSeconds = 300,
+        [int]$MaxPastSeconds = 90,
         [int]$FutureGraceSeconds = 45
     )
 
     $metadata = Get-RolloutMetadataContextFromFile -Path $Path
+    if ([bool]$metadata.IsSubagent) { return $null }
     $fileInfo = Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue
     if ($null -eq $fileInfo) { return $null }
 
@@ -934,10 +955,11 @@ function Get-NotifyMessageFromRolloutContext {
     return "$accountLabel$provider | $(Shorten-Text $cwdLabel 24)`r`n$threadLabel$(Shorten-Text $thread 18)`r`n$taskLabel$task"
 }
 
-function Get-NotifyMessageFromLatestRollout {
+function Get-NotifyMessageFromFreshRolloutCompletion {
     param(
         [AllowNull()][string]$RequestedCodexHome,
-        [datetime]$AnchorUtc = ([DateTime]::UtcNow)
+        [datetime]$AnchorUtc = ([DateTime]::UtcNow),
+        [int]$MaxPastSeconds = 90
     )
 
     $resolvedCodexHome = Resolve-CodexHome $RequestedCodexHome
@@ -953,19 +975,21 @@ function Get-NotifyMessageFromLatestRollout {
     }
 
     $futureGraceSeconds = 45
-    $fallbackContext = $null
     try {
         for ($attempt = 1; $attempt -le 2; $attempt++) {
             $bestCandidate = $null
             $scannedCount = 0
+            $oldestRelevantWriteUtc = $AnchorUtc.AddSeconds(-1 * ([int]$MaxPastSeconds + 15))
             $files = @(Get-ChildItem -LiteralPath $sessionsDir -Recurse -Filter 'rollout-*.jsonl' -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.LastWriteTimeUtc -ge $oldestRelevantWriteUtc } |
                 Sort-Object LastWriteTimeUtc -Descending |
-                Select-Object -First 24)
-            Write-DiagnosticLog ("rollout fallback latest completion scan attempt={0} files={1} home='{2}' anchor='{3}' future={4}s." -f
+                Select-Object -First 12)
+            Write-DiagnosticLog ("rollout fallback fresh completion scan attempt={0} files={1} home='{2}' anchor='{3}' past={4}s future={5}s." -f
                 $attempt,
                 $files.Count,
                 $resolvedCodexHome,
                 $AnchorUtc.ToString('o'),
+                $MaxPastSeconds,
                 $futureGraceSeconds)
 
             foreach ($file in $files) {
@@ -981,18 +1005,11 @@ function Get-NotifyMessageFromLatestRollout {
                 }
 
                 $scannedCount++
-                if (-not $fallbackContext) {
-                    $metadataContext = Get-RolloutMetadataContextFromFile ([string]$file.FullName)
-                    if (Test-RolloutContextHasUsefulInfo $metadataContext) {
-                        $fallbackContext = $metadataContext
-                    }
-                }
-
-                $context = Get-RolloutLatestCompletionContext `
+                $context = Get-RolloutCompletionContextNearAnchor `
                     -Path ([string]$file.FullName) `
                     -AnchorUtc $AnchorUtc `
-                    -FutureGraceSeconds $futureGraceSeconds `
-                    -Fast
+                    -MaxPastSeconds $MaxPastSeconds `
+                    -FutureGraceSeconds $futureGraceSeconds
                 if ($null -eq $context) { continue }
 
                 $candidate = [pscustomobject]@{
@@ -1014,8 +1031,9 @@ function Get-NotifyMessageFromLatestRollout {
             if ($bestCandidate) {
                 $selected = $bestCandidate
                 $context = $selected.Context
+                $script:CompletionId = [string]$context.CompletedTurnId
                 $completedAtText = if ($context.CompletedAtUtc) { ([DateTime]$context.CompletedAtUtc).ToString('o') } else { '' }
-                Write-DiagnosticLog ("rollout fallback selected latest file='{0}' turn='{1}' completedAt='{2}' ageSeconds={3:n1} distanceSeconds={4:n1} scanBytes={5} scannedFiles={6} provider='{7}' cwdSet={8} taskSet={9} taskFound={10}." -f
+                Write-DiagnosticLog ("rollout fallback selected fresh file='{0}' turn='{1}' completedAt='{2}' ageSeconds={3:n1} distanceSeconds={4:n1} scanBytes={5} scannedFiles={6} provider='{7}' cwdSet={8} taskSet={9} taskFound={10}." -f
                     $selected.File.Name,
                     ([string]$context.CompletedTurnId),
                     $completedAtText,
@@ -1040,8 +1058,8 @@ function Get-NotifyMessageFromLatestRollout {
         return ''
     }
 
-    Write-DiagnosticLog 'rollout fallback found no completed rollout; using metadata-only fallback.'
-    return (Get-NotifyMessageFromRolloutContext $fallbackContext)
+    Write-DiagnosticLog 'rollout fallback found no fresh completed rollout.'
+    return ''
 }
 
 function Test-NotifyMessageNeedsRolloutContext {
@@ -1069,6 +1087,67 @@ function Test-NotifyMessageNeedsRolloutContext {
         return $true
     }
     return $false
+}
+
+function Test-AndClaimCompletion {
+    param(
+        [AllowNull()][string]$RequestedHome,
+        [AllowNull()][string]$Id,
+        [AllowNull()][string]$StateDirectory
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Id)) { return $true }
+    try {
+        $normalizedHome = ([string]$RequestedHome).Trim()
+        try { $normalizedHome = [System.IO.Path]::GetFullPath($normalizedHome).TrimEnd('\', '/').ToLowerInvariant() } catch { }
+
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $hashBytes = $sha.ComputeHash($utf8.GetBytes("$normalizedHome`n$($Id.Trim())"))
+        }
+        finally {
+            $sha.Dispose()
+        }
+        $hash = ([BitConverter]::ToString($hashBytes) -replace '-', '').Substring(0, 32)
+        $claimDir = if ([string]::IsNullOrWhiteSpace($StateDirectory)) {
+            Join-Path ([System.IO.Path]::GetTempPath()) 'ai-session-manager-completions'
+        }
+        else {
+            $StateDirectory
+        }
+        New-Item -ItemType Directory -Path $claimDir -Force | Out-Null
+
+        $now = [DateTime]::UtcNow
+        foreach ($oldFile in @(Get-ChildItem -LiteralPath $claimDir -Filter '*.lock' -ErrorAction SilentlyContinue)) {
+            if (($now - $oldFile.LastWriteTimeUtc).TotalHours -gt 48) {
+                Remove-Item -LiteralPath $oldFile.FullName -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        $claimPath = Join-Path $claimDir "$hash.lock"
+        try {
+            $stream = [System.IO.File]::Open(
+                $claimPath,
+                [System.IO.FileMode]::CreateNew,
+                [System.IO.FileAccess]::Write,
+                [System.IO.FileShare]::Read
+            )
+            try {
+                $bytes = $utf8.GetBytes(([string]$Id).Trim())
+                $stream.Write($bytes, 0, $bytes.Length)
+            }
+            finally {
+                $stream.Dispose()
+            }
+            return $false
+        }
+        catch {
+            return (Test-Path -LiteralPath $claimPath -PathType Leaf)
+        }
+    }
+    catch {
+        return $false
+    }
 }
 
 function Test-RolloutCompletionSelection {
@@ -1129,29 +1208,45 @@ function Test-RolloutCompletionSelection {
             '{"timestamp":"2026-06-14T00:04:59Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"latest-turn"}}'
         )
         [System.IO.File]::WriteAllLines($path, [string[]]$lateNotifyLines, $utf8)
-        $lateContext = Get-RolloutLatestCompletionContext `
+        $lateContext = Get-RolloutCompletionContextNearAnchor `
             -Path $path `
             -AnchorUtc ([DateTime]'2026-06-14T00:30:00.0000000Z') `
+            -MaxPastSeconds 90 `
             -FutureGraceSeconds 45
-        $thirdCheck = (
-            [bool]$lateContext.HasCompletedTurn -and
-            [string]$lateContext.CompletedTurnId -eq 'latest-turn' -and
-            [string]$lateContext.LastUserTask -eq 'latest task text' -and
-            [bool]$lateContext.CompletionTaskFound
-        )
+        $thirdCheck = ($null -eq $lateContext)
 
-        $lateFastContext = Get-RolloutLatestCompletionContext `
+        $freshContext = Get-RolloutCompletionContextNearAnchor `
             -Path $path `
-            -AnchorUtc ([DateTime]'2026-06-14T00:30:00.0000000Z') `
-            -FutureGraceSeconds 45 `
-            -Fast
+            -AnchorUtc ([DateTime]'2026-06-14T00:05:00.0000000Z') `
+            -MaxPastSeconds 90 `
+            -FutureGraceSeconds 45
         $fourthCheck = (
-            [bool]$lateFastContext.HasCompletedTurn -and
-            [string]$lateFastContext.CompletedTurnId -eq 'latest-turn' -and
-            [string]$lateFastContext.LastUserTask -eq 'latest task text'
+            [bool]$freshContext.HasCompletedTurn -and
+            [string]$freshContext.CompletedTurnId -eq 'latest-turn' -and
+            [string]$freshContext.LastUserTask -eq 'latest task text'
         )
 
-        return ($firstCheck -and $secondCheck -and $thirdCheck -and $fourthCheck)
+        $claimDir = Join-Path $tempDir 'claims'
+        $firstClaim = Test-AndClaimCompletion -RequestedHome 'selftest-home' -Id 'latest-turn' -StateDirectory $claimDir
+        $duplicateClaim = Test-AndClaimCompletion -RequestedHome 'selftest-home' -Id 'latest-turn' -StateDirectory $claimDir
+        $fifthCheck = (-not $firstClaim -and $duplicateClaim)
+        $responseComplete = '{"timestamp":"2026-06-14T00:05:00Z","type":"event_msg","payload":{"type":"response_complete","turn_id":"response-turn"}}' | ConvertFrom-Json
+        $sixthCheck = -not (Test-RolloutTaskCompleteObject $responseComplete)
+
+        $subagentLines = @(
+            '{"timestamp":"2026-06-14T00:04:57Z","type":"session_meta","payload":{"model_provider":"custom","cwd":"D:\\work","id":"subagent-session","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent","depth":1}}}}}',
+            '{"timestamp":"2026-06-14T00:04:58Z","type":"event_msg","payload":{"type":"task_started","turn_id":"subagent-turn"}}',
+            '{"timestamp":"2026-06-14T00:04:59Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"subagent-turn"}}'
+        )
+        [System.IO.File]::WriteAllLines($path, [string[]]$subagentLines, $utf8)
+        $subagentContext = Get-RolloutCompletionContextNearAnchor `
+            -Path $path `
+            -AnchorUtc ([DateTime]'2026-06-14T00:05:00.0000000Z') `
+            -MaxPastSeconds 90 `
+            -FutureGraceSeconds 45
+        $seventhCheck = ($null -eq $subagentContext)
+
+        return ($firstCheck -and $secondCheck -and $thirdCheck -and $fourthCheck -and $fifthCheck -and $sixthCheck -and $seventhCheck)
     }
     catch {
         return $false
@@ -1190,20 +1285,43 @@ $needsRolloutContext = Test-NotifyMessageNeedsRolloutContext $Message
 if (-not $needsRolloutContext -and ([string]$Message).Length -le 32 -and @($RemainingArgs).Count -gt 0) {
     $needsRolloutContext = $true
 }
-Write-DiagnosticLog ("message precheck length={0} needsRollout={1} remainingArgs={2} hasMessageBase64={3}" -f
+$isMonitorSource = ([string]$Source).Trim() -match '^(?i:monitor|mon|rollout|watcher)'
+$isCompletionNotification = [string]::Equals([string]$Kind, 'Complete', [System.StringComparison]::OrdinalIgnoreCase)
+$requiresFreshCompletion = (
+    $isCompletionNotification -and
+    (-not $isMonitorSource -or [string]::IsNullOrWhiteSpace([string]$CompletionId))
+)
+$suppressLocalCompletion = $false
+Write-DiagnosticLog ("message precheck length={0} needsRollout={1} requiresFreshCompletion={2} remainingArgs={3} hasMessageBase64={4}" -f
     ([string]$Message).Length,
     [bool]$needsRolloutContext,
+    [bool]$requiresFreshCompletion,
     @($RemainingArgs).Count,
     (-not [string]::IsNullOrWhiteSpace($MessageBase64)))
-if ($needsRolloutContext) {
-    Write-DiagnosticLog 'message needs rollout context.'
-    $rolloutMessage = Get-NotifyMessageFromLatestRollout -RequestedCodexHome $CodexHome -AnchorUtc $script:NotifyStartedAtUtc
+if ($requiresFreshCompletion) {
+    Write-DiagnosticLog 'completion notification requires a fresh rollout completion event.'
+    $rolloutMessage = Get-NotifyMessageFromFreshRolloutCompletion `
+        -RequestedCodexHome $CodexHome `
+        -AnchorUtc $script:NotifyStartedAtUtc `
+        -MaxPastSeconds $script:CompletionFreshnessSeconds
+    if (-not [string]::IsNullOrWhiteSpace($rolloutMessage)) {
+        $Message = $rolloutMessage
+        Write-DiagnosticLog ("fresh rollout completion confirmed messageLength={0}." -f ([string]$Message).Length)
+    }
+    else {
+        $suppressLocalCompletion = $true
+        Write-DiagnosticLog 'local completion popup will be suppressed: no fresh rollout completion event.'
+    }
+}
+elseif ($needsRolloutContext -and $isCompletionNotification) {
+    Write-DiagnosticLog 'monitor message needs rollout context.'
+    $rolloutMessage = Get-NotifyMessageFromFreshRolloutCompletion `
+        -RequestedCodexHome $CodexHome `
+        -AnchorUtc $script:NotifyStartedAtUtc `
+        -MaxPastSeconds $script:CompletionFreshnessSeconds
     if (-not [string]::IsNullOrWhiteSpace($rolloutMessage)) {
         $Message = $rolloutMessage
         Write-DiagnosticLog ("rollout context applied messageLength={0}." -f ([string]$Message).Length)
-    }
-    else {
-        Write-DiagnosticLog 'rollout context unavailable.'
     }
 }
 if ([string]::IsNullOrWhiteSpace($Message)) {
@@ -1310,6 +1428,22 @@ Invoke-ForwardNotify -EncodedCommand $ForwardBase64 -ExtraArgs $RemainingArgs
 
 if ($ForwardOnly) {
     Write-DiagnosticLog 'exit after forward only.'
+    return
+}
+
+if (-not $isCompletionNotification) {
+    Write-DiagnosticLog ("local popup suppressed: kind '$Kind' is not a task completion.")
+    return
+}
+
+if ($suppressLocalCompletion) {
+    Write-DiagnosticLog 'exit after suppressing unconfirmed completion popup.'
+    return
+}
+
+if ($isCompletionNotification -and
+    (Test-AndClaimCompletion -RequestedHome $CodexHome -Id $CompletionId)) {
+    Write-DiagnosticLog ("completion popup suppressed: completion id is missing or already claimed id='{0}'." -f (Shorten-Text $CompletionId 18))
     return
 }
 
